@@ -18,30 +18,69 @@ const BING_SESSION_URLS = [
   'https://cn.bing.com/translator'
 ];
 
-function setupMenus() {
-  chrome.contextMenus.removeAll(() => {
+const DEFAULT_ENGINES = { google: true, bing: true };
+const MENU_CONTEXTS = ['image', 'selection'];
+
+async function getEngineSettings() {
+  try {
+    const data = await chrome.storage.local.get('engines');
+    const saved = data && data.engines;
+    const google = saved && typeof saved.google === 'boolean' ? saved.google : true;
+    const bing = saved && typeof saved.bing === 'boolean' ? saved.bing : true;
+    if (!google && !bing) return { ...DEFAULT_ENGINES };
+    return { google, bing };
+  } catch (_err) {
+    return { ...DEFAULT_ENGINES };
+  }
+}
+
+async function setupMenus() {
+  const engines = await getEngineSettings();
+  await new Promise((resolve) => chrome.contextMenus.removeAll(resolve));
+  if (engines.google && engines.bing) {
     chrome.contextMenus.create({
       id: MENU_ROOT_ID,
       title: '翻译',
-      contexts: ['image', 'selection']
+      contexts: MENU_CONTEXTS
     });
     chrome.contextMenus.create({
       id: MENU_GOOGLE_ID,
       parentId: MENU_ROOT_ID,
       title: '谷歌翻译',
-      contexts: ['image', 'selection']
+      contexts: MENU_CONTEXTS
     });
     chrome.contextMenus.create({
       id: MENU_BING_ID,
       parentId: MENU_ROOT_ID,
       title: '必应翻译',
-      contexts: ['image', 'selection']
+      contexts: MENU_CONTEXTS
     });
+    return;
+  }
+  if (engines.google) {
+    chrome.contextMenus.create({
+      id: MENU_GOOGLE_ID,
+      title: '谷歌翻译',
+      contexts: MENU_CONTEXTS
+    });
+    return;
+  }
+  chrome.contextMenus.create({
+    id: MENU_BING_ID,
+    title: '必应翻译',
+    contexts: MENU_CONTEXTS
   });
 }
 
-chrome.runtime.onInstalled.addListener(setupMenus);
-chrome.runtime.onStartup.addListener(setupMenus);
+chrome.runtime.onInstalled.addListener(() => {
+  setupMenus();
+});
+chrome.runtime.onStartup.addListener(() => {
+  setupMenus();
+});
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.engines) setupMenus();
+});
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));

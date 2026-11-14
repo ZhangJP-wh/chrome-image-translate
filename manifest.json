@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
   "name": "图片翻译",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "在网页图片或选中的文字上右键「翻译」，可选谷歌翻译或必应翻译，以简体中文覆盖在原文对应位置（无法覆盖时改为页面内弹窗）。",
   "permissions": [
     "contextMenus",
     "scripting",
-    "offscreen"
+    "offscreen",
+    "storage"
   ],
   "host_permissions": [
     "http://*/*",

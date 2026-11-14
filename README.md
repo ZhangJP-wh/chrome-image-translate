@@ -5,7 +5,7 @@ Chrome / Edge 扩展：在网页**图片**或**选中的文字**上右键「翻�
 Chrome / Edge extension: right-click an **image** or **selected text** → **翻译** → **谷歌翻译** or **必应翻译**. Simplified Chinese is overlaid in place when possible; otherwise a popup appears on the same page. No new tab is opened.
 
 **仓库 / Repo:** https://github.com/ZhangJP-wh/chrome-image-translate  
-**版本 / Version:** **0.1.4**（见 `manifest.json`）
+**版本 / Version:** **0.1.5**（见 `manifest.json`）
 
 ### 一句话场景 / What it’s for
 
@@ -49,7 +49,7 @@ Chrome / Edge extension: right-click an **image** or **selected text** → **翻
 - 或先**选中一段文字**再右键 → **翻译** → 同样可选这两种服务
 - 稍等片刻，简体中文会出现在原图文字或原句上方；如果选区无法覆盖，会在当前页弹出译文
 - 用右上角的 **显示原文 / 显示译文** 切换，点 **关闭** 可去掉覆盖层或弹窗
-- 点工具栏上的扩展图标，也可以再看一遍简要用法
+- 点工具栏上的扩展图标，可以勾选要显示的翻译服务：只开一项时，该项会出现在右键一级菜单；两项都开时，会出现「翻译」二级菜单（这是 Chrome 的限制）
 - 仓库里的 `demo/test-en-text.png` 是一张虚构英文示例图，可以放到任意普通网页里用来试用图片翻译
 
 Then:
@@ -58,7 +58,7 @@ Then:
 - Or **select text**, then right-click → the same submenu
 - Stay on the same page; Chinese covers the corresponding regions when possible, otherwise an on-page popup appears
 - Toggle **显示原文 / 显示译文**, or click **关闭**
-- Click the toolbar icon for a short usage reminder
+- Click the toolbar icon to choose which engines appear in the context menu, and to reread the short usage reminder
 - Try image translation with `demo/test-en-text.png` (a fictional English sentence, not a real webpage screenshot)
 
 若你是从已经解压好的文件夹加载的（例如本机迭代安装），改完文件后只需到 `chrome://extensions` 点「重新加载」，不必再下载一次。  
@@ -116,6 +116,7 @@ See also [`AGENT_INSTALL.md`](./AGENT_INSTALL.md).
 | 全程留在当前页，不打开新标签 | Stays on the current page; no new tab |
 | 「必应翻译」排在「谷歌翻译」下面，面向中国大陆等谷歌可能无法访问的网络，无需申请密钥 | **必应翻译** sits below **谷歌翻译** for networks where Google is unreachable (e.g. mainland China); no API key to apply for |
 | 图片识别（OCR）在本地完成，不依赖 CDN；选中文字不经过 OCR | Image OCR runs locally with no CDN; selected text skips OCR |
+| 点工具栏图标可勾选显示「谷歌翻译」「必应翻译」或两项都显示。只开一项时出现在右键一级菜单；两项都开时收成「翻译」子菜单 | In the toolbar popup, choose Google, Bing, or both. One engine appears as a top-level item; both are grouped under a **翻译** submenu |
 | 菜单前的图标使用谷歌翻译产品图标（Chrome 会把扩展图标显示在右键菜单旁） | Menu uses the Google Translate product icon (Chrome shows the extension icon beside the item) |
 | 自带虚构英文示例图 `demo/test-en-text.png`，方便试用图片翻译 | Ships a fictional English demo image `demo/test-en-text.png` for trying image translation |
 
@@ -127,9 +128,9 @@ See also [`AGENT_INSTALL.md`](./AGENT_INSTALL.md).
 
 The extension finds text regions in an image locally, translates those lines into Simplified Chinese with the engine you picked, and overlays the result. Selected page text is translated directly (no OCR) and overlaid on the original sentence when possible.
 
-图片和选中文字共用同一个「翻译」菜单：点开后先是「谷歌翻译」，下面是「必应翻译」。前者走 Google 翻译，在中国大陆往往需要可访问 Google 的网络；后者走必应翻译的公开网页通道（通常会落到 `cn.bing.com`），在中国大陆一般可直接使用，也不需要用户自己申请密钥。
+默认情况下，图片和选中文字共用同一个「翻译」菜单：点开后先是「谷歌翻译」，下面是「必应翻译」。也可以在工具栏弹出页里只勾选其中一项，这时该项会直接出现在右键一级菜单，不再经过二级菜单。前者走 Google 翻译，在中国大陆往往需要可访问 Google 的网络；后者走必应翻译的公开网页通道（通常会落到 `cn.bing.com`），在中国大陆一般可直接使用，也不需要用户自己申请密钥。
 
-Images and selected text share one **翻译** menu: **谷歌翻译** first, then **必应翻译**. Google Translate usually needs a network that can reach Google. Bing uses the public translator page (often `cn.bing.com`) and typically works in mainland China without an API key.
+By default, images and selected text share one **翻译** submenu: **谷歌翻译** first, then **必应翻译**. In the toolbar popup you can enable only one engine, which then appears as a top-level context-menu item with no submenu. Google Translate usually needs a network that can reach Google. Bing uses the public translator page (often `cn.bing.com`) and typically works in mainland China without an API key.
 
 部分网站（例如 X）会在打开右键菜单时清掉选区。扩展会在右键按下时立刻记下选中的文字和位置，因此一般仍可翻译。输入框、文本域和下拉框里的选中文字会以弹窗显示译文，而不是改写输入框本身。
 
@@ -157,8 +158,10 @@ Some sites (such as X) clear the selection when the context menu opens. The exte
   Blank lines in a selection are not sent to engines that reject empty strings, so quoted or nested cards with paragraph breaks still translate.
 - 若页面在右键之后大范围重绘，覆盖层可能改为就近弹窗。  
   If the page heavily redraws after the right-click, the overlay may become a nearby popup.
-- Chrome 不能给右键菜单的每一项单独设图标，两个翻译服务会出现在「翻译」子菜单里。  
-  Chrome cannot set a distinct icon on each context-menu item; the two engines appear in a **翻译** submenu.
+- Chrome 不能给同一个扩展同时放两个一级右键项：只要两项都开，就会被收成「翻译」子菜单。只开其中一项时，该项可以直接出现在一级菜单。  
+  Chrome will not show two top-level context-menu items from one extension at once, so enabling both engines creates a **翻译** submenu. Enabling only one places that item at the top level.
+- Chrome 不能给右键菜单的每一项单独设图标，菜单旁显示的是扩展图标。  
+  Chrome cannot set a distinct icon on each context-menu item; it shows the extension icon beside the item.
 - 百度、有道等官方翻译接口需要用户自己申请密钥，因此没有写进这个公开项目。  
   Official APIs such as Baidu or Youdao require a user-issued key, so they are not bundled in this public project.
 
@@ -196,9 +199,9 @@ After edits, click **Reload**.
 
 ## 隐私 / Privacy
 
-本扩展不要求登录，也不收集分析数据。图片文字识别在本地完成；选中的文字或识别出的句子会发送到你所选的翻译服务（Google 或必应）以获取译文。扩展本身不会把这些内容上传到本仓库作者的服务器。
+本扩展不要求登录，也不收集分析数据。图片文字识别在本地完成；选中的文字或识别出的句子会发送到你所选的翻译服务（Google 或必应）以获取译文。扩展本身不会把这些内容上传到本仓库作者的服务器。你在弹出页勾选的翻译服务选项只保存在本机 `chrome.storage.local`。
 
-The extension does not require an account and does not collect analytics. Image OCR runs on your computer. Selected text or recognized lines are sent to the translation service you choose (Google or Bing) to obtain a translation. This project does not upload that content to a server run by the repo author.
+The extension does not require an account and does not collect analytics. Image OCR runs on your computer. Selected text or recognized lines are sent to the translation service you choose (Google or Bing) to obtain a translation. This project does not upload that content to a server run by the repo author. The engine checkboxes in the popup are stored only in local `chrome.storage.local`.
 
 README / 仓库配图勿使用真实浏览记录、私人网址或真实账号数据；演示图须脱敏或虚构。仓库中的 `demo/test-en-text.png` 是一句虚构英文，仅供试用。
 
@@ -207,6 +210,11 @@ Do not use real browsing history, private URLs, or real account data in README/r
 ---
 
 ## 变更 / Changelog
+
+### v0.1.5
+
+- 可在工具栏弹出页勾选要显示的翻译服务。只开「谷歌翻译」或只开「必应翻译」时，该项会出现在右键一级菜单，没有二级菜单；两项都开时仍是「翻译」子菜单（Chrome 限制）  
+  The toolbar popup can show Google, Bing, or both. A single engine appears as a top-level context-menu item; enabling both still uses a **翻译** submenu (a Chrome limit)
 
 ### v0.1.4
 
