@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "图片翻译",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "在网页图片或选中的文字上右键「翻译」，可选谷歌翻译或必应翻译。非中文译为简体中文，简体中文译为英文，译文显示在可拖动的悬浮小窗中。",
   "permissions": [
     "contextMenus",

@@ -5,7 +5,7 @@ Chrome / Edge 扩展：在网页**图片**或**选中的文字**上右键「翻�
 Chrome / Edge extension: right-click an **image** or **selected text** → **翻译** → **谷歌翻译** or **必应翻译**. The translation appears in a draggable floating window on the same page, without covering the original and without opening a new tab. Non-Chinese text is translated into Simplified Chinese; Simplified Chinese is translated into English.
 
 **仓库 / Repo:** https://github.com/ZhangJP-wh/chrome-image-translate  
-**版本 / Version:** **0.1.9**（见 `manifest.json`）
+**版本 / Version:** **0.1.10**（见 `manifest.json`）
 
 ### 一句话场景 / What it’s for
 
@@ -19,8 +19,8 @@ Chrome / Edge extension: right-click an **image** or **selected text** → **翻
   In mainland China, Google Translate is often unreachable; **必应翻译** usually works and needs no API key
 - 悬浮小窗可以拖动，窗里的文字可以选中复制，点「关闭」即可去掉  
   Drag the floating window, select text inside it, or click **关闭** to dismiss
-- 小窗会按译文长短自动伸缩，并尽量保持原文的分段、换行和对齐，方便对照学习  
-  The window resizes to the translation and keeps the original paragraphs, line breaks, and alignment as closely as possible, so you can compare them
+- 小窗会按译文长短自动伸缩，并尽量保持原文的分段、换行和对齐，方便对照学习；小窗会出现在选中的文字或图片旁边，而不是浏览器窗口最上方  
+  The window resizes to the translation and keeps the original paragraphs, line breaks, and alignment as closely as possible, so you can compare them. It appears next to the selected text or image, not at the top of the browser window
 
 示例图（虚构英文句子，不是真实网页截图）：
 
@@ -213,6 +213,11 @@ Do not use real browsing history, private URLs, or real account data in README/r
 ---
 
 ## 变更 / Changelog
+
+### v0.1.10
+
+- 按屏幕上实际看到的行和空段来排译文，像 X 这类不用 DOM 换行来分段的页面也能对上；悬浮小窗紧挨着选中的文字或图片，不再跑到浏览器窗口最上方  
+  The window now follows the lines and blank gaps you actually see on the page, including sites like X that do not put paragraph breaks in the DOM. It stays next to the selected text or image instead of jumping to the top of the browser window
 
 ### v0.1.9
 

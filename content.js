@@ -656,6 +656,131 @@ function boot() {
     }
   }
 
+  function isVisuallyHidden(node) {
+    let el = node && (node.nodeType === 1 ? node : node.parentElement);
+    while (el && el !== document.documentElement && el !== document.body) {
+      if (el.hidden || el.nodeName === 'NOSCRIPT') return true;
+      try {
+        if (el.getAttribute && el.getAttribute('aria-hidden') === 'true') return true;
+        const style = getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) === 0) {
+          return true;
+        }
+        const rect = el.getBoundingClientRect();
+        if ((style.overflow === 'hidden' || style.clip !== 'auto') && rect.width <= 1 && rect.height <= 1) {
+          return true;
+        }
+        if ((style.position === 'absolute' || style.position === 'fixed')
+            && (rect.bottom < -8 || rect.right < -8 || rect.left > (window.innerWidth || 0) + 8 || rect.top > (window.innerHeight || 0) + 8)
+            && (parseInt(style.left, 10) < -80 || parseInt(style.top, 10) < -80 || parseInt(style.textIndent, 10) < -80)) {
+          return true;
+        }
+      } catch (_err) {}
+      el = el.parentElement;
+    }
+    return false;
+  }
+
+  function pushGlyph(list, text, rect) {
+    if (!text || !rect) return;
+    if (!(rect.width >= 0.5 && rect.height >= 0.5)) return;
+    list.push({
+      text: String(text),
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+      right: rect.right,
+      bottom: rect.bottom
+    });
+  }
+
+  function collectGlyphsFromTextNode(node, start, end, list) {
+    const value = node.nodeValue || '';
+    const from = Math.max(0, start);
+    const to = Math.min(value.length, end);
+    if (to <= from) return;
+    const range = document.createRange();
+    // Fast path: the whole slice sits on one line.
+    try {
+      range.setStart(node, from);
+      range.setEnd(node, to);
+      const rects = serializeRects(range.getClientRects());
+      if (rects.length <= 1) {
+        if (rects[0]) pushGlyph(list, value.slice(from, to), rects[0]);
+        return;
+      }
+    } catch (_err) {
+      return;
+    }
+    let cursor = from;
+    while (cursor < to) {
+      const cp = value.codePointAt(cursor);
+      const len = cp > 0xffff ? 2 : 1;
+      try {
+        range.setStart(node, cursor);
+        range.setEnd(node, cursor + len);
+        const rects = serializeRects(range.getClientRects());
+        if (rects[0]) pushGlyph(list, value.slice(cursor, cursor + len), rects[0]);
+      } catch (_err) {}
+      cursor += len;
+    }
+  }
+
+  function collectGlyphsFromRange(range) {
+    if (!range || range.collapsed) return [];
+    const glyphs = [];
+    const root = range.commonAncestorContainer;
+    const walkerRoot = root.nodeType === 1 ? root : (root.parentNode || document.body);
+    const walker = document.createTreeWalker(
+      walkerRoot,
+      NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+      {
+        acceptNode(node) {
+          if (node.nodeType === 1) {
+            if (isSkippableElement(node)) return NodeFilter.FILTER_REJECT;
+            if (isVisuallyHidden(node)) return NodeFilter.FILTER_REJECT;
+            const tag = node.tagName;
+            if (tag === 'IMG' || tag === 'IMAGE' || tag === 'BR') {
+              return rangeIntersects(range, node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+            }
+            return NodeFilter.FILTER_SKIP;
+          }
+          if (!node.nodeValue) return NodeFilter.FILTER_REJECT;
+          if (isVisuallyHidden(node)) return NodeFilter.FILTER_REJECT;
+          return rangeIntersects(range, node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+        }
+      }
+    );
+    let node;
+    while ((node = walker.nextNode())) {
+      if (node.nodeType === 3) {
+        let start = 0;
+        let end = (node.nodeValue || '').length;
+        if (node === range.startContainer) start = range.startOffset;
+        if (node === range.endContainer) end = range.endOffset;
+        collectGlyphsFromTextNode(node, start, end, glyphs);
+        continue;
+      }
+      if (node.tagName === 'IMG' || node.tagName === 'IMAGE') {
+        const alt = (node.getAttribute && (node.getAttribute('alt') || '')) || '';
+        if (!alt) continue;
+        try {
+          pushGlyph(glyphs, alt, node.getBoundingClientRect());
+        } catch (_err) {}
+      }
+    }
+    return glyphs;
+  }
+
+  function extractVisualBlocksFromRange(range) {
+    const glyphs = collectGlyphsFromRange(range);
+    if (!glyphs.length) return [];
+    // Align against the selected text's own box, not a wide common ancestor
+    // (that would make left-aligned tweets look centered).
+    return CITLayout.groupGlyphsIntoBlocks(glyphs, CITLayout.unionRect(glyphs));
+  }
+
   function nearestBlock(node) {
     let el = node && (node.nodeType === 1 ? node : node.parentElement);
     while (el) {
@@ -884,9 +1009,16 @@ function boot() {
     let blocks = [];
     if (best.range) {
       try {
-        blocks = extractBlocksFromRange(best.range);
+        blocks = extractVisualBlocksFromRange(best.range);
       } catch (_err) {
         blocks = [];
+      }
+      if (!blocks.length) {
+        try {
+          blocks = extractBlocksFromRange(best.range);
+        } catch (_err) {
+          blocks = [];
+        }
       }
     }
     if (!blocks.length && (best.text || '').trim()) {
@@ -917,30 +1049,23 @@ function boot() {
   }
 
   function chooseAnchor(snapshot) {
-    const fallback = (snapshot && snapshot.mouse) || { x: Math.round(window.innerWidth / 2), y: 24 };
+    const mouse = snapshot && snapshot.mouse ? snapshot.mouse : null;
     const placed = snapshot ? getPlacementRects(snapshot) : null;
-    if (placed && placed.rects.length) {
-      const union = unionRect(placed.rects);
-      return { x: union.left, y: union.bottom + 8, sourceRect: union };
-    }
-    if (snapshot && snapshot.rects && snapshot.rects[0]) {
-      const r = snapshot.rects[0];
-      return { x: r.left, y: r.bottom + 8 };
-    }
-    return fallback;
+    const rawRects = (placed && placed.rects && placed.rects.length)
+      ? placed.rects
+      : ((snapshot && snapshot.rects) || []);
+    const vh = window.innerHeight || 800;
+    const clustered = CITLayout.clusterRects(rawRects, mouse, Math.max(160, vh * 0.4));
+    const sourceRect = clustered.length ? (CITLayout.unionRect(clustered) || unionRect(clustered)) : null;
+    return { mouse, sourceRect, prefer: 'below' };
   }
 
   function anchorFromImage(img) {
     if (!isElementCurrent(img)) {
-      return { x: 24, y: 24 };
+      return { prefer: 'right' };
     }
     const r = img.getBoundingClientRect();
-    const vw = window.innerWidth || 800;
-    const margin = 8;
-    if (r.right + margin + 240 <= vw) {
-      return { x: r.right + margin, y: Math.max(margin, r.top), sourceRect: r };
-    }
-    return { x: r.left, y: r.bottom + margin, sourceRect: r };
+    return { sourceRect: r, prefer: 'right' };
   }
 
   function handlePrepareSelection(message) {
@@ -1208,27 +1333,22 @@ function boot() {
       const vw = window.innerWidth || document.documentElement.clientWidth || 320;
       const vh = window.innerHeight || document.documentElement.clientHeight || 240;
 
-      const anchor = this.getAnchor() || { x: 24, y: 24 };
-      this.host.style.left = `${Math.max(margin, anchor.x)}px`;
-      this.host.style.top = `${Math.max(margin, anchor.y)}px`;
-
+      const anchor = this.getAnchor() || {};
       const rect = this.host.getBoundingClientRect();
-      let left = rect.left;
-      let top = rect.top;
-      const w = rect.width || maxW;
-      const h = rect.height || 80;
-      if (left + w + margin > vw) left = vw - w - margin;
-      if (top + h + margin > vh) {
-        if (anchor.sourceRect && anchor.sourceRect.top - h - margin >= margin) {
-          top = anchor.sourceRect.top - h - 8;
-        } else {
-          top = Math.max(margin, vh - h - margin);
-        }
-      }
-      if (left < margin) left = margin;
-      if (top < margin) top = margin;
-      this.host.style.left = `${left}px`;
-      this.host.style.top = `${top}px`;
+      const w = rect.width || this.host.offsetWidth || 240;
+      const h = rect.height || this.host.offsetHeight || 80;
+      const pos = CITLayout.pickPanelPosition({
+        sourceRect: anchor.sourceRect,
+        mouse: anchor.mouse,
+        panelW: w,
+        panelH: h,
+        vw,
+        vh,
+        margin,
+        prefer: anchor.prefer
+      });
+      this.host.style.left = `${pos.x}px`;
+      this.host.style.top = `${pos.y}px`;
     }
 
     destroy() {

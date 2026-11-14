@@ -139,6 +139,248 @@
     }));
   }
 
+  function asRect(r) {
+    if (!r) return null;
+    const left = Number(r.left);
+    const top = Number(r.top);
+    const width = r.width != null ? Number(r.width) : (Number(r.right) - left);
+    const height = r.height != null ? Number(r.height) : (Number(r.bottom) - top);
+    if (![left, top, width, height].every(Number.isFinite)) return null;
+    return {
+      left,
+      top,
+      width,
+      height,
+      right: left + width,
+      bottom: top + height
+    };
+  }
+
+  function unionRect(rects) {
+    const items = (rects || []).map(asRect).filter(Boolean);
+    if (!items.length) return null;
+    let left = Infinity;
+    let top = Infinity;
+    let right = -Infinity;
+    let bottom = -Infinity;
+    for (const r of items) {
+      left = Math.min(left, r.left);
+      top = Math.min(top, r.top);
+      right = Math.max(right, r.right);
+      bottom = Math.max(bottom, r.bottom);
+    }
+    return {
+      left,
+      top,
+      width: Math.max(0, right - left),
+      height: Math.max(0, bottom - top),
+      right,
+      bottom
+    };
+  }
+
+  function intersectRect(a, b) {
+    const ra = asRect(a);
+    const rb = asRect(b);
+    if (!ra || !rb) return null;
+    const left = Math.max(ra.left, rb.left);
+    const top = Math.max(ra.top, rb.top);
+    const right = Math.min(ra.right, rb.right);
+    const bottom = Math.min(ra.bottom, rb.bottom);
+    if (right - left < 1 || bottom - top < 1) return null;
+    return {
+      left,
+      top,
+      width: right - left,
+      height: bottom - top,
+      right,
+      bottom
+    };
+  }
+
+  function rectGap(a, b) {
+    const ra = asRect(a);
+    const rb = asRect(b);
+    if (!ra || !rb) return Infinity;
+    const xGap = Math.max(0, Math.max(ra.left, rb.left) - Math.min(ra.right, rb.right));
+    const yGap = Math.max(0, Math.max(ra.top, rb.top) - Math.min(ra.bottom, rb.bottom));
+    return Math.hypot(xGap, yGap);
+  }
+
+  function clusterRects(rects, point, maxGap) {
+    const items = (rects || []).map(asRect).filter((r) => r && r.width >= 2 && r.height >= 2);
+    if (!items.length) return [];
+    const gapLimit = (Number.isFinite(maxGap) && maxGap > 0) ? maxGap : 240;
+    const dist = (r) => {
+      if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return 0;
+      return Math.hypot((r.left + r.width / 2) - point.x, (r.top + r.height / 2) - point.y);
+    };
+    const unused = items.slice().sort((a, b) => dist(a) - dist(b) || a.top - b.top || a.left - b.left);
+    const cluster = [unused.shift()];
+    let union = unionRect(cluster);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (let i = unused.length - 1; i >= 0; i -= 1) {
+        if (rectGap(unused[i], union) <= gapLimit) {
+          cluster.push(unused[i]);
+          unused.splice(i, 1);
+          union = unionRect(cluster);
+          changed = true;
+        }
+      }
+    }
+    return cluster;
+  }
+
+  function lineTextFromGlyphs(glyphs) {
+    return (glyphs || [])
+      .slice()
+      .sort((a, b) => (a.left - b.left) || (a.top - b.top))
+      .map((g) => (g && g.text != null) ? String(g.text) : '')
+      .join('')
+      .replace(/[ 	]+/g, ' ')
+      .replace(/ /g, ' ')
+      .trim();
+  }
+
+  function groupGlyphsIntoBlocks(glyphs, containerRect) {
+    const items = (glyphs || []).map((g) => {
+      const rect = asRect(g);
+      if (!rect || !g || g.text == null) return null;
+      return Object.assign({}, rect, { text: String(g.text) });
+    }).filter((g) => g && (g.text.length || (g.width >= 1 && g.height >= 1)));
+
+    if (!items.length) return [];
+
+    const sorted = items.slice().sort((a, b) => a.top - b.top || a.left - b.left);
+    const lines = [];
+    for (const glyph of sorted) {
+      const mid = (glyph.top + glyph.bottom) / 2;
+      const h = Math.max(1, glyph.height);
+      let found = null;
+      for (let i = lines.length - 1; i >= 0; i -= 1) {
+        const line = lines[i];
+        const overlap = Math.min(line.bottom, glyph.bottom) - Math.max(line.top, glyph.top);
+        if (mid >= line.top && mid <= line.bottom) {
+          found = line;
+          break;
+        }
+        if (overlap > Math.min(h, Math.max(1, line.bottom - line.top)) * 0.4) {
+          found = line;
+          break;
+        }
+      }
+      if (found) {
+        found.glyphs.push(glyph);
+        found.top = Math.min(found.top, glyph.top);
+        found.bottom = Math.max(found.bottom, glyph.bottom);
+        found.left = Math.min(found.left, glyph.left);
+        found.right = Math.max(found.right, glyph.right);
+      } else {
+        lines.push({
+          glyphs: [glyph],
+          top: glyph.top,
+          bottom: glyph.bottom,
+          left: glyph.left,
+          right: glyph.right
+        });
+      }
+    }
+
+    lines.sort((a, b) => a.top - b.top || a.left - b.left);
+    const heights = lines
+      .map((line) => Math.max(0, line.bottom - line.top))
+      .filter((height) => height > 0)
+      .sort((a, b) => a - b);
+    const medH = heights.length ? heights[Math.floor(heights.length / 2)] : 16;
+    // CSS line boxes usually abut when wrapping. A visual blank line leaves a
+    // gap around one line-height; use a threshold below that.
+    const paraGap = Math.max(medH * 0.8, 8);
+    const box = asRect(containerRect) || unionRect(lines);
+
+    const blocks = [];
+    let current = [];
+    let lastBottom = null;
+    const flush = () => {
+      const kept = [];
+      const rects = [];
+      for (const line of current) {
+        const text = lineTextFromGlyphs(line.glyphs);
+        if (!text) continue;
+        kept.push(text);
+        rects.push(line);
+      }
+      current = [];
+      if (!kept.length) return;
+      blocks.push({
+        align: inferAlignFromRects(rects, box) || 'left',
+        lines: kept
+      });
+    };
+
+    for (const line of lines) {
+      if (lastBottom != null && (line.top - lastBottom) > paraGap) flush();
+      current.push(line);
+      lastBottom = line.bottom;
+    }
+    flush();
+    return blocks;
+  }
+
+  function pickPanelPosition(options) {
+    const opts = options || {};
+    const margin = Number.isFinite(opts.margin) ? opts.margin : 8;
+    const vw = Number(opts.vw) || 0;
+    const vh = Number(opts.vh) || 0;
+    const panelW = Math.max(0, Number(opts.panelW) || 0);
+    const panelH = Math.max(0, Number(opts.panelH) || 0);
+    const mouse = opts.mouse && Number.isFinite(opts.mouse.x) && Number.isFinite(opts.mouse.y)
+      ? opts.mouse
+      : null;
+    const prefer = opts.prefer === 'right' ? 'right' : 'below';
+
+    function clamp(x, y) {
+      return {
+        x: Math.min(Math.max(margin, x), Math.max(margin, vw - panelW - margin)),
+        y: Math.min(Math.max(margin, y), Math.max(margin, vh - panelH - margin))
+      };
+    }
+
+    function fits(x, y) {
+      return x >= margin
+        && y >= margin
+        && (x + panelW + margin) <= vw + 0.5
+        && (y + panelH + margin) <= vh + 0.5;
+    }
+
+    const viewport = { left: 0, top: 0, width: vw, height: vh, right: vw, bottom: vh };
+    const visible = opts.sourceRect ? intersectRect(opts.sourceRect, viewport) : null;
+
+    if (visible && visible.width >= 2 && visible.height >= 2) {
+      const below = { x: visible.left, y: visible.bottom + margin };
+      const above = { x: visible.left, y: visible.top - panelH - margin };
+      const right = { x: visible.right + margin, y: visible.top };
+      const left = { x: visible.left - panelW - margin, y: visible.top };
+      const order = prefer === 'right'
+        ? [right, below, above, left]
+        : [below, above, right, left];
+      for (const cand of order) {
+        if (fits(cand.x, cand.y)) return { x: cand.x, y: cand.y };
+      }
+      for (const cand of [right, left]) {
+        if (cand.x >= margin && cand.x + panelW + margin <= vw) {
+          return clamp(cand.x, visible.top);
+        }
+      }
+      if (mouse) return clamp(visible.left, mouse.y + margin);
+      return clamp(visible.left, visible.bottom + margin);
+    }
+
+    if (mouse) return clamp(mouse.x + 12, mouse.y + 12);
+    return clamp(margin, margin);
+  }
+
   root.CITLayout = {
     normalizeAlign,
     inferAlignFromBox,
@@ -148,7 +390,13 @@
     blocksToSourceText,
     linesFromBlocks,
     applyTranslations,
-    sanitizeBlocks
+    sanitizeBlocks,
+    unionRect,
+    intersectRect,
+    rectGap,
+    clusterRects,
+    groupGlyphsIntoBlocks,
+    pickPanelPosition
   };
 
   if (typeof module !== 'undefined' && module.exports) {
