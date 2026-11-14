@@ -127,38 +127,73 @@ async function ocrImage(buffer, mime) {
   return response.result;
 }
 
+async function requestTranslateChunk(chunk) {
+  let res;
+  try {
+    res = await fetch(TRANSLATE_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json+protobuf',
+        'X-Goog-API-Key': TRANSLATE_API_KEY
+      },
+      body: JSON.stringify([[chunk, 'auto', TARGET_LANG], 'te_lib'])
+    });
+  } catch (err) {
+    throw new Error(friendlyError(err, '翻译失败，请稍后重试'));
+  }
+  if (!res.ok) {
+    const error = new Error(`翻译服务暂时不可用（${res.status}）`);
+    error.status = res.status;
+    throw error;
+  }
+  let data;
+  try {
+    data = await res.json();
+  } catch (err) {
+    throw new Error('翻译结果格式异常');
+  }
+  const translated = Array.isArray(data) ? data[0] : null;
+  if (!Array.isArray(translated) || translated.length !== chunk.length) {
+    throw new Error('翻译结果格式异常');
+  }
+  return translated.map((item) => (item == null ? '' : String(item)));
+}
+
+async function translateChunk(chunk) {
+  try {
+    return await requestTranslateChunk(chunk);
+  } catch (err) {
+    if (err.status !== 400 || chunk.length === 1) throw err;
+    const out = [];
+    for (const line of chunk) {
+      try {
+        const [translated] = await requestTranslateChunk([line]);
+        out.push(translated);
+      } catch (inner) {
+        if (inner.status !== 400) throw inner;
+        out.push(line);
+      }
+    }
+    return out;
+  }
+}
+
 async function translateLines(lines) {
-  if (!lines.length) return [];
-  const out = [];
-  for (let i = 0; i < lines.length; i += TRANSLATE_CHUNK) {
-    const chunk = lines.slice(i, i + TRANSLATE_CHUNK);
-    let res;
-    try {
-      res = await fetch(TRANSLATE_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json+protobuf',
-          'X-Goog-API-Key': TRANSLATE_API_KEY
-        },
-        body: JSON.stringify([[chunk, 'auto', TARGET_LANG], 'te_lib'])
-      });
-    } catch (err) {
-      throw new Error(friendlyError(err, '翻译失败，请稍后重试'));
-    }
-    if (!res.ok) {
-      throw new Error(`翻译服务暂时不可用（${res.status}）`);
-    }
-    let data;
-    try {
-      data = await res.json();
-    } catch (err) {
-      throw new Error('翻译结果格式异常');
-    }
-    const translated = Array.isArray(data) ? data[0] : null;
-    if (!Array.isArray(translated) || translated.length !== chunk.length) {
-      throw new Error('翻译结果格式异常');
-    }
-    out.push(...translated.map((item) => (item == null ? '' : String(item))));
+  const source = (lines || []).map((line) => (line == null ? '' : String(line)));
+  if (!source.length) return [];
+  const out = source.map(() => '');
+  const work = [];
+  source.forEach((line, index) => {
+    // The translateHtml API returns HTTP 400 for empty strings.
+    if (line !== '') work.push({ index, text: line });
+  });
+  if (!work.length) return out;
+  for (let i = 0; i < work.length; i += TRANSLATE_CHUNK) {
+    const chunkItems = work.slice(i, i + TRANSLATE_CHUNK);
+    const translated = await translateChunk(chunkItems.map((item) => item.text));
+    chunkItems.forEach((item, j) => {
+      out[item.index] = translated[j] == null ? '' : String(translated[j]);
+    });
   }
   return out;
 }
@@ -190,8 +225,9 @@ function isImageClick(info) {
 }
 
 function splitSelectionText(text) {
-  if (text.includes('\n')) return text.split('\n');
-  return [text];
+  const normalized = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  if (normalized.includes('\n')) return normalized.split('\n');
+  return [normalized];
 }
 
 async function handleTranslateClick(info, tab) {

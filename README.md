@@ -7,7 +7,7 @@ Right-click an image or selected text → **翻译**. Simplified Chinese is over
 菜单项前面的图标使用谷歌翻译的产品图标（Chrome 会把扩展图标显示在右键菜单项旁边）。
 
 **仓库 / Repo:** https://github.com/ZhangJP-wh/chrome-image-translate  
-**版本 / Version:** 0.1.2（见 `manifest.json`）
+**版本 / Version:** 0.1.3（见 `manifest.json`）
 
 ## 给电脑小白：一分钟安装（Mac 和 Windows 相同）
 
@@ -79,6 +79,7 @@ Then: right-click an image or selected text → **翻译**. Stay on the same pag
 - 预置的识别语言模型以英语为主，其他语言也可能认出一部分，但效果会差一些。
 - 选中文字会尽量覆盖在原句位置。若选区丢失、无法取得位置、位于输入框 / 文本域 / 下拉框中，或页面无法承载覆盖层，会在当前页弹出译文，而不会打开新标签。
 - Chrome 内置 PDF 阅读器通常无法注入扩展脚本，因此 PDF 里的选中文字可能无法翻译。
+- 选中文字里的空行不会再送给翻译接口（该接口遇到空字符串会返回 400）。引用卡片、嵌套内容里若段落之间有空行，也可以正常翻译。
 - 部分网站（例如 X）会在打开右键菜单时清掉选区。扩展会在右键按下时立刻记下选中的文字和位置，因此一般仍可翻译；若页面随后大范围重绘，覆盖层可能改为就近弹窗。
 
 本扩展以解压加载的方式提供，暂未上架 Chrome 网上应用店。

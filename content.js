@@ -915,6 +915,58 @@ function boot() {
     };
   }
 
+  function readSelectionFrom(sel) {
+    if (!sel || sel.rangeCount < 1 || sel.isCollapsed) return null;
+    const text = String(sel);
+    let range = null;
+    let rects = [];
+    try {
+      range = sel.getRangeAt(0).cloneRange();
+      rects = serializeRects(range.getClientRects());
+    } catch (_err) {
+      range = null;
+      rects = [];
+    }
+    return { text, range, rects };
+  }
+
+  function collectSelectionCandidates(event) {
+    const candidates = [];
+    const seen = new Set();
+    const pushSel = (sel) => {
+      if (!sel || seen.has(sel)) return;
+      seen.add(sel);
+      const read = readSelectionFrom(sel);
+      if (read && read.text) candidates.push(read);
+    };
+
+    try { pushSel(window.getSelection()); } catch (_err) {}
+    try { pushSel(document.getSelection()); } catch (_err) {}
+
+    const path = (event && typeof event.composedPath === 'function') ? event.composedPath() : [];
+    for (const node of path) {
+      try {
+        if (node && node.getSelection) pushSel(node.getSelection());
+        const root = node && (node.shadowRoot || (node.host && node));
+        if (root && root.getSelection) pushSel(root.getSelection());
+      } catch (_err) {
+        // Closed shadow roots may throw or return nothing.
+      }
+    }
+
+    let node = event && event.target;
+    for (let i = 0; i < 8 && node; i += 1) {
+      try {
+        if (node.getSelection) pushSel(node.getSelection());
+        if (node.shadowRoot && node.shadowRoot.getSelection) {
+          pushSel(node.shadowRoot.getSelection());
+        }
+      } catch (_err) {}
+      node = node.parentNode || node.host || (node.getRootNode && node.getRootNode().host) || null;
+    }
+    return candidates;
+  }
+
   function captureSelectionSnapshot(event) {
     const mouse = { x: event.clientX, y: event.clientY };
     const scrollX = window.scrollX || window.pageXOffset || 0;
@@ -943,30 +995,21 @@ function boot() {
       };
     }
 
-    let text = '';
-    let range = null;
-    let rects = [];
-    try {
-      const sel = window.getSelection();
-      if (sel && sel.rangeCount > 0) {
-        text = String(sel);
-        if (!sel.isCollapsed) {
-          range = sel.getRangeAt(0).cloneRange();
-          rects = serializeRects(range.getClientRects());
-        }
-      }
-    } catch (_err) {
-      // Selection may be inaccessible (e.g. some closed shadow trees).
-    }
+    const candidates = collectSelectionCandidates(event);
+    const best = candidates.find((item) => item.text && item.text.trim()) || candidates[0] || {
+      text: '',
+      range: null,
+      rects: []
+    };
 
     return {
-      text,
+      text: best.text || '',
       inFormControl: false,
       mouse,
       scrollX,
       scrollY,
-      rects,
-      range,
+      rects: best.rects || [],
+      range: best.range || null,
       time
     };
   }
