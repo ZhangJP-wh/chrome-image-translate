@@ -12,16 +12,71 @@ function boot() {
   let lastContextImage = null;
   let lastContextTime = 0;
   let lastSelectionSnapshot = null;
+  let lastGoodSelectionSnapshot = null;
+  let lastPointer = null;
   let currentSelectionView = null;
 
-  document.addEventListener('contextmenu', (event) => {
-    const img = findImageInEvent(event);
-    if (img) {
-      lastContextImage = img;
-      lastContextTime = Date.now();
+  function rememberPointer(event) {
+    if (!event || !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) return;
+    lastPointer = { x: event.clientX, y: event.clientY, time: Date.now() };
+  }
+
+  function lastPointerMouse(maxAge) {
+    const age = Number.isFinite(maxAge) ? maxAge : 120000;
+    if (!lastPointer || (Date.now() - lastPointer.time) > age) return null;
+    return { x: lastPointer.x, y: lastPointer.y };
+  }
+
+  function rememberGoodSnapshot(snapshot) {
+    if (snapshot && String(snapshot.text || '').trim()) {
+      lastGoodSelectionSnapshot = snapshot;
     }
-    lastSelectionSnapshot = captureSelectionSnapshot(event);
-  }, true);
+  }
+
+  function onContextMenuCapture(event) {
+    rememberPointer(event);
+    try {
+      const img = findImageInEvent(event);
+      if (img) {
+        lastContextImage = img;
+        lastContextTime = Date.now();
+      }
+    } catch (_err) {}
+    try {
+      const snap = captureSelectionSnapshot(event);
+      if (snap && String(snap.text || '').trim()) {
+        lastSelectionSnapshot = snap;
+        rememberGoodSnapshot(snap);
+      } else if (lastGoodSelectionSnapshot) {
+        lastSelectionSnapshot = Object.assign({}, lastGoodSelectionSnapshot, {
+          mouse: { x: event.clientX, y: event.clientY },
+          time: Date.now()
+        });
+      } else {
+        lastSelectionSnapshot = snap;
+      }
+    } catch (_err) {
+      if (lastGoodSelectionSnapshot) {
+        lastSelectionSnapshot = Object.assign({}, lastGoodSelectionSnapshot, {
+          mouse: { x: event.clientX, y: event.clientY },
+          time: Date.now()
+        });
+      }
+    }
+  }
+
+  window.addEventListener('pointerdown', rememberPointer, true);
+  window.addEventListener('contextmenu', onContextMenuCapture, true);
+
+  let selectionChangeTimer = 0;
+  document.addEventListener('selectionchange', () => {
+    clearTimeout(selectionChangeTimer);
+    selectionChangeTimer = setTimeout(() => {
+      try {
+        rememberGoodSnapshot(captureSelectionSnapshot(null));
+      } catch (_err) {}
+    }, 80);
+  });
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (!message || !message.type) return undefined;
@@ -535,18 +590,32 @@ function boot() {
 
   function getPlacementRects(snapshot) {
     if (!snapshot) return null;
+    let liveRects = null;
     if (snapshot.range && isRangeLive(snapshot.range)) {
       try {
         const rects = serializeRects(snapshot.range.getClientRects());
-        if (usableRects(rects)) return { rects, live: true };
+        if (usableRects(rects)) liveRects = rects;
       } catch (_err) {
         // Range may become unusable after DOM updates.
       }
     }
+    let frozen = null;
     if (snapshot.rects && snapshot.rects.length) {
       const adjusted = adjustRectsForScroll(snapshot.rects, snapshot.scrollX, snapshot.scrollY);
-      if (usableRects(adjusted)) return { rects: adjusted, live: false };
+      if (usableRects(adjusted)) frozen = adjusted;
     }
+    if (liveRects && frozen) {
+      const liveUnion = unionRect(liveRects);
+      const frozenUnion = unionRect(frozen);
+      const liveArea = liveUnion.width * liveUnion.height;
+      const frozenArea = frozenUnion.width * frozenUnion.height;
+      const liveGrew = frozenArea > 0 && liveArea > frozenArea * 2.2;
+      const jumpedTop = frozenUnion.top > 80 && liveUnion.top < 24 && liveUnion.height > frozenUnion.height * 1.6;
+      if (liveGrew || jumpedTop) return { rects: frozen, live: false };
+      return { rects: liveRects, live: true };
+    }
+    if (liveRects) return { rects: liveRects, live: true };
+    if (frozen) return { rects: frozen, live: false };
     return null;
   }
 
@@ -681,6 +750,17 @@ function boot() {
     return false;
   }
 
+  function fontSizeOf(node) {
+    const el = node && (node.nodeType === 1 ? node : node.parentElement);
+    if (!el) return 16;
+    try {
+      const size = parseFloat(getComputedStyle(el).fontSize);
+      return Number.isFinite(size) && size > 0 ? size : 16;
+    } catch (_err) {
+      return 16;
+    }
+  }
+
   function pushGlyph(list, text, rect) {
     if (!text || !rect) return;
     if (!(rect.width >= 0.5 && rect.height >= 0.5)) return;
@@ -706,7 +786,8 @@ function boot() {
       range.setStart(node, from);
       range.setEnd(node, to);
       const rects = serializeRects(range.getClientRects());
-      if (rects.length <= 1) {
+      const tooTall = rects.length === 1 && rects[0].height > fontSizeOf(node) * 1.7;
+      if (rects.length <= 1 && !tooTall) {
         if (rects[0]) pushGlyph(list, value.slice(from, to), rects[0]);
         return;
       }
@@ -773,12 +854,164 @@ function boot() {
     return glyphs;
   }
 
+  function groupRectsIntoLineBoxes(rects) {
+    const items = (rects || []).filter((r) => r && r.width >= 1 && r.height >= 1)
+      .slice()
+      .sort((a, b) => a.top - b.top || a.left - b.left);
+    const lines = [];
+    for (const r of items) {
+      const mid = (r.top + r.bottom) / 2;
+      let found = null;
+      for (let i = lines.length - 1; i >= 0; i -= 1) {
+        const line = lines[i];
+        const overlap = Math.min(line.bottom, r.bottom) - Math.max(line.top, r.top);
+        const lineH = Math.max(1, line.bottom - line.top);
+        if ((mid >= line.top && mid <= line.bottom) || overlap > Math.min(r.height, lineH) * 0.4) {
+          found = line;
+          break;
+        }
+      }
+      if (found) {
+        found.top = Math.min(found.top, r.top);
+        found.bottom = Math.max(found.bottom, r.bottom);
+        found.left = Math.min(found.left, r.left);
+        found.right = Math.max(found.right, r.right);
+      } else {
+        lines.push({
+          top: r.top,
+          bottom: r.bottom,
+          left: r.left,
+          right: r.right
+        });
+      }
+    }
+    lines.sort((a, b) => a.top - b.top || a.left - b.left);
+    return lines;
+  }
+
+  function caretRangeAt(x, y) {
+    try {
+      if (typeof document.caretRangeFromPoint === 'function') {
+        return document.caretRangeFromPoint(x, y);
+      }
+    } catch (_err) {}
+    try {
+      if (typeof document.caretPositionFromPoint === 'function') {
+        const pos = document.caretPositionFromPoint(x, y);
+        if (!pos || !pos.offsetNode) return null;
+        const range = document.createRange();
+        range.setStart(pos.offsetNode, pos.offset);
+        range.collapse(true);
+        return range;
+      }
+    } catch (_err) {}
+    return null;
+  }
+
+  function textFromLineBox(selRange, box) {
+    const midY = box.top + Math.max(2, (box.bottom - box.top) * 0.5);
+    const start = caretRangeAt(box.left + 1, midY);
+    const end = caretRangeAt(Math.max(box.left + 1, box.right - 1), midY);
+    if (!start || !end) return '';
+    try {
+      const lineRange = document.createRange();
+      lineRange.setStart(start.startContainer, start.startOffset);
+      lineRange.setEnd(end.startContainer, end.endOffset);
+      if (selRange) {
+        if (selRange.compareBoundaryPoints(Range.START_TO_START, lineRange) > 0) {
+          lineRange.setStart(selRange.startContainer, selRange.startOffset);
+        }
+        if (selRange.compareBoundaryPoints(Range.END_TO_END, lineRange) < 0) {
+          lineRange.setEnd(selRange.endContainer, selRange.endOffset);
+        }
+      }
+      return String(lineRange.toString() || '').replace(/[ \t]+/g, ' ').replace(/\u00a0/g, ' ').trim();
+    } catch (_err) {
+      return '';
+    }
+  }
+
+  function assignGlyphsToLineBoxes(boxes, glyphs) {
+    return (boxes || []).map((box) => {
+      const hits = [];
+      for (const g of glyphs || []) {
+        const mid = (g.top + g.bottom) / 2;
+        if (mid >= box.top - 1 && mid <= box.bottom + 1) hits.push(g);
+      }
+      hits.sort((a, b) => a.left - b.left || a.top - b.top);
+      const text = hits.map((g) => (g && g.text) || '').join('').replace(/[ \t]+/g, ' ').replace(/\u00a0/g, ' ').trim();
+      return { box, text };
+    });
+  }
+
+  function blocksFromLineItems(items) {
+    const lines = (items || []).filter((item) => item && item.box);
+    if (!lines.length) return [];
+    const heights = lines
+      .map((item) => Math.max(0, item.box.bottom - item.box.top))
+      .filter((height) => height > 0)
+      .sort((a, b) => a - b);
+    const medH = heights.length ? heights[Math.floor(heights.length / 2)] : 16;
+    const paraGap = Math.max(medH * 0.8, 8);
+    const box = CITLayout.unionRect(lines.map((item) => item.box));
+    const blocks = [];
+    let current = [];
+    let lastBottom = null;
+    const flush = () => {
+      const kept = [];
+      const rects = [];
+      for (const item of current) {
+        const text = (item.text || '').trim();
+        if (!text) continue;
+        kept.push(text);
+        rects.push(item.box);
+      }
+      current = [];
+      if (!kept.length) return;
+      blocks.push({
+        align: CITLayout.inferAlignFromRects(rects, box) || 'left',
+        lines: kept
+      });
+    };
+    for (const item of lines) {
+      if (lastBottom != null && (item.box.top - lastBottom) > paraGap) flush();
+      current.push(item);
+      lastBottom = item.box.bottom;
+    }
+    flush();
+    return blocks;
+  }
+
+  function countBlockStructure(blocks) {
+    if (!blocks || !blocks.length) return 0;
+    return CITLayout.linesFromBlocks(blocks).length + Math.max(0, blocks.length - 1) * 2;
+  }
+
+  function extractBlocksFromLineBoxes(range, glyphs) {
+    if (!range || range.collapsed) return [];
+    const boxes = groupRectsIntoLineBoxes(serializeRects(range.getClientRects()));
+    if (boxes.length < 2) return [];
+    const assigned = assignGlyphsToLineBoxes(boxes, glyphs);
+    for (const item of assigned) {
+      if (!item.text) item.text = textFromLineBox(range, item.box);
+    }
+    return blocksFromLineItems(assigned);
+  }
+
   function extractVisualBlocksFromRange(range) {
     const glyphs = collectGlyphsFromRange(range);
-    if (!glyphs.length) return [];
-    // Align against the selected text's own box, not a wide common ancestor
-    // (that would make left-aligned tweets look centered).
-    return CITLayout.groupGlyphsIntoBlocks(glyphs, CITLayout.unionRect(glyphs));
+    let fromGlyphs = [];
+    if (glyphs.length) {
+      fromGlyphs = CITLayout.groupGlyphsIntoBlocks(glyphs, CITLayout.unionRect(glyphs));
+    }
+    let fromBoxes = [];
+    try {
+      fromBoxes = extractBlocksFromLineBoxes(range, glyphs);
+    } catch (_err) {
+      fromBoxes = [];
+    }
+    if (countBlockStructure(fromBoxes) > countBlockStructure(fromGlyphs)) return fromBoxes;
+    return fromGlyphs;
   }
 
   function nearestBlock(node) {
@@ -970,11 +1203,13 @@ function boot() {
   }
 
   function captureSelectionSnapshot(event) {
-    const mouse = { x: event.clientX, y: event.clientY };
+    const mouse = event && Number.isFinite(event.clientX) && Number.isFinite(event.clientY)
+      ? { x: event.clientX, y: event.clientY }
+      : lastPointerMouse();
     const scrollX = window.scrollX || window.pageXOffset || 0;
     const scrollY = window.scrollY || window.pageYOffset || 0;
     const time = Date.now();
-    const form = findFormControlInPath(event);
+    const form = event ? findFormControlInPath(event) : (isFormControl(document.activeElement) ? document.activeElement : null);
 
     if (form) {
       let text = '';
@@ -1049,14 +1284,24 @@ function boot() {
   }
 
   function chooseAnchor(snapshot) {
-    const mouse = snapshot && snapshot.mouse ? snapshot.mouse : null;
+    const mouse = (snapshot && snapshot.mouse && Number.isFinite(snapshot.mouse.x))
+      ? snapshot.mouse
+      : lastPointerMouse();
     const placed = snapshot ? getPlacementRects(snapshot) : null;
     const rawRects = (placed && placed.rects && placed.rects.length)
       ? placed.rects
       : ((snapshot && snapshot.rects) || []);
-    const vh = window.innerHeight || 800;
-    const clustered = CITLayout.clusterRects(rawRects, mouse, Math.max(160, vh * 0.4));
-    const sourceRect = clustered.length ? (CITLayout.unionRect(clustered) || unionRect(clustered)) : null;
+    const clustered = CITLayout.clusterRects(rawRects, mouse, 96, 80);
+    let sourceRect = clustered.length ? (CITLayout.unionRect(clustered) || unionRect(clustered)) : null;
+    if (sourceRect && mouse && sourceRect.height > 220) {
+      const near = clustered.filter((r) => {
+        const top = r.top;
+        const bottom = r.bottom != null ? r.bottom : r.top + r.height;
+        return top <= mouse.y + 120 && bottom >= mouse.y - 120;
+      });
+      const local = near.length ? (CITLayout.unionRect(near) || unionRect(near)) : null;
+      if (local && local.height >= 8) sourceRect = local;
+    }
     return { mouse, sourceRect, prefer: 'below' };
   }
 
@@ -1069,7 +1314,31 @@ function boot() {
   }
 
   function handlePrepareSelection(message) {
-    const snapshot = isSnapshotFresh(lastSelectionSnapshot) ? lastSelectionSnapshot : null;
+    let snapshot = isSnapshotFresh(lastSelectionSnapshot) ? lastSelectionSnapshot : null;
+    if (!(snapshot && String(snapshot.text || '').trim()) && isSnapshotFresh(lastGoodSelectionSnapshot)) {
+      snapshot = Object.assign({}, lastGoodSelectionSnapshot, {
+        mouse: (snapshot && snapshot.mouse) || lastPointerMouse() || lastGoodSelectionSnapshot.mouse,
+        time: Date.now()
+      });
+    }
+    try {
+      const live = captureSelectionSnapshot(null);
+      if (live && String(live.text || '').trim()) {
+        const liveBetter = countBlockStructure(live.blocks) > countBlockStructure(snapshot && snapshot.blocks);
+        if (!snapshot || !String(snapshot.text || '').trim() || liveBetter) {
+          snapshot = Object.assign({}, live, {
+            mouse: (snapshot && snapshot.mouse) || lastPointerMouse() || live.mouse
+          });
+        } else if (snapshot && !(snapshot.rects && snapshot.rects.length) && live.rects && live.rects.length) {
+          snapshot = Object.assign({}, snapshot, {
+            rects: live.rects,
+            range: live.range || snapshot.range,
+            scrollX: live.scrollX,
+            scrollY: live.scrollY
+          });
+        }
+      }
+    } catch (_err) {}
     const text = pickSelectionText(snapshot, message.fallbackText);
     if (!text.trim()) {
       return { ok: false, error: '没有可翻译的文字' };
@@ -1283,11 +1552,13 @@ function boot() {
       const anchor = this.getAnchor() || {};
       const source = anchor.sourceRect;
       const lineCount = this.bodyEl ? this.bodyEl.querySelectorAll('.line').length : 0;
-      let width = Math.min(capW, Math.max(minW, natural));
-      if (this.phase === 'result' && source && source.width >= 80) {
-        const longContent = lineCount >= 3 || natural >= source.width * 0.45;
+      const sourceW = (source && source.width >= 80) ? Math.round(source.width) : 0;
+      const maxReasonable = Math.min(capW, Math.max(sourceW, Math.round(Math.min(vw * 0.5, 560)), 420));
+      let width = Math.min(maxReasonable, Math.max(minW, natural));
+      if (this.phase === 'result' && sourceW) {
+        const longContent = lineCount >= 2 || natural >= sourceW * 0.45;
         if (longContent) {
-          width = Math.min(capW, Math.max(minW, Math.max(natural, Math.round(source.width))));
+          width = Math.min(capW, Math.max(width, sourceW));
         }
       }
       if (this.phase !== 'result') {

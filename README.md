@@ -5,7 +5,7 @@ Chrome / Edge 扩展：在网页**图片**或**选中的文字**上右键「翻�
 Chrome / Edge extension: right-click an **image** or **selected text** → **翻译** → **谷歌翻译** or **必应翻译**. The translation appears in a draggable floating window on the same page, without covering the original and without opening a new tab. Non-Chinese text is translated into Simplified Chinese; Simplified Chinese is translated into English.
 
 **仓库 / Repo:** https://github.com/ZhangJP-wh/chrome-image-translate  
-**版本 / Version:** **0.1.10**（见 `manifest.json`）
+**版本 / Version:** **0.1.11**（见 `manifest.json`）
 
 ### 一句话场景 / What it’s for
 
@@ -213,6 +213,11 @@ Do not use real browsing history, private URLs, or real account data in README/r
 ---
 
 ## 变更 / Changelog
+
+### v0.1.11
+
+- 更稳地记住选中文字的分行和位置：即使页面在右键时改掉了选区，悬浮小窗也会紧挨着原文，并保持对应的行和空段，而不会时不时跑到窗口顶部、把译文挤成一段  
+  The extension now keeps a more reliable snapshot of the selected lines and their position, so the window still sits next to the original and keeps its line and paragraph breaks even when the page changes the selection on right-click, instead of sometimes jumping to the top and flattening the translation into one paragraph
 
 ### v0.1.10
 

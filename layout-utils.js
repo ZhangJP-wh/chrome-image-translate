@@ -207,10 +207,18 @@
     return Math.hypot(xGap, yGap);
   }
 
-  function clusterRects(rects, point, maxGap) {
+  function clusterRects(rects, point, maxGap, maxYGap) {
     const items = (rects || []).map(asRect).filter((r) => r && r.width >= 2 && r.height >= 2);
     if (!items.length) return [];
-    const gapLimit = (Number.isFinite(maxGap) && maxGap > 0) ? maxGap : 240;
+    let gapLimit = 240;
+    let yLimit = Infinity;
+    if (maxGap && typeof maxGap === 'object') {
+      if (Number.isFinite(maxGap.maxGap) && maxGap.maxGap > 0) gapLimit = maxGap.maxGap;
+      if (Number.isFinite(maxGap.maxYGap) && maxGap.maxYGap > 0) yLimit = maxGap.maxYGap;
+    } else {
+      if (Number.isFinite(maxGap) && maxGap > 0) gapLimit = maxGap;
+      if (Number.isFinite(maxYGap) && maxYGap > 0) yLimit = maxYGap;
+    }
     const dist = (r) => {
       if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return 0;
       return Math.hypot((r.left + r.width / 2) - point.x, (r.top + r.height / 2) - point.y);
@@ -222,8 +230,11 @@
     while (changed) {
       changed = false;
       for (let i = unused.length - 1; i >= 0; i -= 1) {
-        if (rectGap(unused[i], union) <= gapLimit) {
-          cluster.push(unused[i]);
+        const next = unused[i];
+        const yGap = Math.max(0, Math.max(next.top, union.top) - Math.min(next.bottom, union.bottom));
+        if (yGap > yLimit) continue;
+        if (rectGap(next, union) <= gapLimit) {
+          cluster.push(next);
           unused.splice(i, 1);
           union = unionRect(cluster);
           changed = true;
@@ -328,6 +339,35 @@
     return blocks;
   }
 
+  function focusRectAroundMouse(visible, mouse, panelH) {
+    if (!mouse || !visible) return visible;
+    const tall = visible.height > Math.max((panelH || 0) * 2, 120);
+    if (!tall) return visible;
+    const band = Math.max(40, Math.min(140, visible.height));
+    let top = mouse.y - band / 2;
+    let bottom = mouse.y + band / 2;
+    if (mouse.y >= visible.top && mouse.y <= visible.bottom) {
+      top = Math.max(visible.top, mouse.y - band / 2);
+      bottom = Math.min(visible.bottom, mouse.y + band / 2);
+    } else {
+      const nearest = mouse.y < visible.top ? visible.top : visible.bottom;
+      top = Math.max(visible.top, nearest - band / 2);
+      bottom = Math.min(visible.bottom, nearest + band / 2);
+    }
+    if (bottom - top < 8) {
+      bottom = Math.min(visible.bottom, top + 8);
+      top = Math.max(visible.top, bottom - 8);
+    }
+    return {
+      left: visible.left,
+      top,
+      width: visible.width,
+      height: bottom - top,
+      right: visible.right,
+      bottom
+    };
+  }
+
   function pickPanelPosition(options) {
     const opts = options || {};
     const margin = Number.isFinite(opts.margin) ? opts.margin : 8;
@@ -355,11 +395,15 @@
     }
 
     const viewport = { left: 0, top: 0, width: vw, height: vh, right: vw, bottom: vh };
-    const visible = opts.sourceRect ? intersectRect(opts.sourceRect, viewport) : null;
+    const rawVisible = opts.sourceRect ? intersectRect(opts.sourceRect, viewport) : null;
+    const visible = (prefer === 'right' || !mouse)
+      ? rawVisible
+      : focusRectAroundMouse(rawVisible, mouse, panelH);
 
     if (visible && visible.width >= 2 && visible.height >= 2) {
-      const below = { x: visible.left, y: visible.bottom + margin };
-      const above = { x: visible.left, y: visible.top - panelH - margin };
+      const x0 = clamp(visible.left, margin).x;
+      const below = { x: x0, y: visible.bottom + margin };
+      const above = { x: x0, y: visible.top - panelH - margin };
       const right = { x: visible.right + margin, y: visible.top };
       const left = { x: visible.left - panelW - margin, y: visible.top };
       const order = prefer === 'right'
