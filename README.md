@@ -5,7 +5,7 @@ Chrome / Edge 扩展：在网页**图片**或**选中的文字**上右键「翻�
 Chrome / Edge extension: right-click an **image** or **selected text** → **翻译** → **谷歌翻译** or **必应翻译**. The translation appears in a draggable floating window on the same page, without covering the original and without opening a new tab. Non-Chinese text is translated into Simplified Chinese; Simplified Chinese is translated into English.
 
 **仓库 / Repo:** https://github.com/ZhangJP-wh/chrome-image-translate  
-**版本 / Version:** **0.1.8**（见 `manifest.json`）
+**版本 / Version:** **0.1.9**（见 `manifest.json`）
 
 ### 一句话场景 / What it’s for
 
@@ -19,6 +19,8 @@ Chrome / Edge extension: right-click an **image** or **selected text** → **翻
   In mainland China, Google Translate is often unreachable; **必应翻译** usually works and needs no API key
 - 悬浮小窗可以拖动，窗里的文字可以选中复制，点「关闭」即可去掉  
   Drag the floating window, select text inside it, or click **关闭** to dismiss
+- 小窗会按译文长短自动伸缩，并尽量保持原文的分段、换行和对齐，方便对照学习  
+  The window resizes to the translation and keeps the original paragraphs, line breaks, and alignment as closely as possible, so you can compare them
 
 示例图（虚构英文句子，不是真实网页截图）：
 
@@ -113,6 +115,7 @@ See also [`AGENT_INSTALL.md`](./AGENT_INSTALL.md).
 | 图片和选中文字：译文都显示在当前页的可拖动悬浮小窗里，不覆盖原文 | Images and selected text: the translation appears in a draggable on-page floating window, without covering the original |
 | 不是中文一律译成简体中文；原文是简体中文则译成英文 | Non-Chinese text is translated into Simplified Chinese; Simplified Chinese is translated into English |
 | 悬浮小窗可以拖动，窗里的文字可以选中复制，点「关闭」去掉 | The window can be dragged, its text can be selected, and **关闭** dismisses it |
+| 小窗大小随译文长短自动调节；分段、换行尽量与原文一一对应，左对齐 / 右对齐 / 居中也尽量保持一致，方便中英文对照 | The window resizes to the translation; paragraphs, line breaks, and left / right / center alignment follow the original as closely as possible, for side-by-side comparison |
 | 全程留在当前页，不打开新标签 | Stays on the current page; no new tab |
 | 「必应翻译」排在「谷歌翻译」下面，面向中国大陆等谷歌可能无法访问的网络，无需申请密钥 | **必应翻译** sits below **谷歌翻译** for networks where Google is unreachable (e.g. mainland China); no API key to apply for |
 | 图片识别（OCR）在本地完成，不依赖 CDN；选中文字不经过 OCR | Image OCR runs locally with no CDN; selected text skips OCR |
@@ -124,9 +127,9 @@ See also [`AGENT_INSTALL.md`](./AGENT_INSTALL.md).
 
 ## 使用说明 / How it works
 
-扩展会在本地识别图片中的文字，再按你选的服务翻译，并把译文放进当前页的悬浮小窗。选中网页文字时不经过识别，直接翻译，也同样用悬浮小窗显示。不是中文（包括繁体中文）会译成简体中文；如果识别或选中的内容是简体中文，则译成英文。小窗可以拖动，窗里的文字可以选中复制，不会盖住原文。
+扩展会在本地识别图片中的文字，再按你选的服务翻译，并把译文放进当前页的悬浮小窗。选中网页文字时不经过识别，直接翻译，也同样用悬浮小窗显示。不是中文（包括繁体中文）会译成简体中文；如果识别或选中的内容是简体中文，则译成英文。小窗可以拖动，窗里的文字可以选中复制，不会盖住原文。小窗会按译文长短自动伸缩：信很长时窗口也较长，短句则只占较小一块；分段和换行尽量与原文对应，对齐方式（左对齐、右对齐、居中）也尽量保持一致，方便对照学习。
 
-The extension finds text in an image locally, translates it with the engine you picked, and shows the result in an on-page floating window. Selected page text is translated directly (no OCR) and shown the same way. Non-Chinese text, including Traditional Chinese, is translated into Simplified Chinese; Simplified Chinese is translated into English. The window is draggable, its text is selectable, and it does not cover the original.
+The extension finds text in an image locally, translates it with the engine you picked, and shows the result in an on-page floating window. Selected page text is translated directly (no OCR) and shown the same way. Non-Chinese text, including Traditional Chinese, is translated into Simplified Chinese; Simplified Chinese is translated into English. The window is draggable, its text is selectable, and it does not cover the original. It also resizes to the translation: a long letter gets a taller window, a short snippet stays compact. Paragraphs, line breaks, and alignment (left, right, or center) follow the original as closely as possible, so you can compare the two side by side.
 
 默认情况下，图片和选中文字共用同一个「翻译」菜单：点开后先是「谷歌翻译」，下面是「必应翻译」。也可以在工具栏弹出页里只勾选其中一项，这时该项会直接出现在右键一级菜单，不再经过二级菜单。前者走 Google 翻译，在中国大陆往往需要可访问 Google 的网络；后者走必应翻译的公开网页通道（通常会落到 `cn.bing.com`），在中国大陆一般可直接使用，也不需要用户自己申请密钥。
 
@@ -210,6 +213,11 @@ Do not use real browsing history, private URLs, or real account data in README/r
 ---
 
 ## 变更 / Changelog
+
+### v0.1.9
+
+- 悬浮小窗按译文长短自动调节大小；分段、换行尽量与原文一一对应，左对齐 / 右对齐 / 居中也尽量保持一致，方便对照学习  
+  The floating window now resizes to the translation, and tries to keep the original paragraph breaks, line breaks, and left / right / center alignment for easier comparison
 
 ### v0.1.8
 

@@ -1,7 +1,7 @@
 /* 图片翻译 - service worker */
 'use strict';
 
-importScripts('buffer-codec.js');
+importScripts('buffer-codec.js', 'layout-utils.js');
 
 const MENU_ROOT_ID = 'cit-translate-root';
 const MENU_GOOGLE_ID = 'cit-translate-google';
@@ -486,7 +486,7 @@ async function ensureContentScript(tabId, frameId) {
   }
   await chrome.scripting.executeScript({
     target: { tabId, frameIds: [frameId] },
-    files: ['content.js']
+    files: ['buffer-codec.js', 'layout-utils.js', 'content.js']
   });
 }
 
@@ -576,21 +576,28 @@ async function handleSelectionTranslate(info, tab, engine) {
       throw new Error((prepared && prepared.error) || '没有可翻译的文字');
     }
 
-    const source = String(prepared.text || '');
+    const blocks = CITLayout.sanitizeBlocks(prepared.blocks);
+    const source = blocks.length
+      ? CITLayout.blocksToSourceText(blocks)
+      : String(prepared.text || '');
     if (!source.trim()) {
       throw new Error('没有可翻译的文字');
     }
 
-    const parts = splitSelectionText(source);
+    const parts = blocks.length ? CITLayout.linesFromBlocks(blocks) : splitSelectionText(source);
     const targets = resolveTargets(source);
     const translatedParts = await translateLines(parts, engine, engine === 'bing' ? targets.bing : targets.google);
-    const translated = translatedParts.join('\n');
+    const outBlocks = blocks.length
+      ? CITLayout.applyTranslations(blocks, translatedParts)
+      : CITLayout.blocksFromPlainText(translatedParts.join('\n'), 'left');
+    const translated = CITLayout.blocksToSourceText(outBlocks);
 
     await sendToFrame(tabId, frameId, {
       type: 'CIT_SELECTION_RESULT',
       requestId,
       source,
-      text: translated
+      text: translated,
+      blocks: outBlocks
     });
   } catch (err) {
     console.error('文字翻译失败', err);

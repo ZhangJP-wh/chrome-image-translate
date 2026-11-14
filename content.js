@@ -43,7 +43,7 @@ function boot() {
     }
     if (message.type === 'CIT_SELECTION_RESULT') {
       const overlay = findOverlayByRequest(message.requestId);
-      if (overlay) overlay.showResult(message.text || '');
+      if (overlay) overlay.showResult(message.text || '', message.blocks || null);
       return undefined;
     }
     if (message.type === 'CIT_FETCH_FROM_PAGE') {
@@ -59,7 +59,8 @@ function boot() {
       if (overlay) {
         const joined = (message.text != null && String(message.text))
           || (message.boxes || []).map((item) => (item && item.text) ? String(item.text) : '').join('\n');
-        overlay.showResult(joined);
+        const blocks = CITLayout.groupOcrBoxes(message.boxes || [], message.imageWidth || 0);
+        overlay.showResult(joined, blocks.length ? blocks : null);
       }
       return undefined;
     }
@@ -375,6 +376,7 @@ function boot() {
       box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
       border: 1px solid rgba(32, 33, 36, 0.12);
       width: 100%;
+      min-width: 0;
       font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Heiti SC", sans-serif;
     }
     .popup.is-error,
@@ -416,13 +418,23 @@ function boot() {
       line-height: 1.55;
       overflow-wrap: anywhere;
       word-break: break-word;
-      max-height: min(50vh, 360px);
       overflow: auto;
-      padding: 10px 14px 14px;
+      padding: 8px 14px 14px;
       color: inherit;
       user-select: text;
       cursor: text;
+    }
+    .para {
+      margin: 0 0 0.9em;
+    }
+    .para:last-child {
+      margin-bottom: 0;
+    }
+    .line {
       white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      min-height: 1.55em;
     }
     .popup.is-loading .body {
       display: flex;
@@ -611,6 +623,227 @@ function boot() {
     return candidates;
   }
 
+
+  const EXPLICIT_BLOCK_TAGS = new Set([
+    'P', 'DIV', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
+    'BLOCKQUOTE', 'PRE', 'TD', 'TH', 'TR', 'DT', 'DD',
+    'ARTICLE', 'SECTION', 'HEADER', 'FOOTER', 'MAIN', 'ASIDE',
+    'ADDRESS', 'FIGCAPTION', 'CENTER'
+  ]);
+  const PARA_BREAK_TAGS = new Set([
+    'P', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
+    'BLOCKQUOTE', 'TR', 'PRE', 'DT', 'DD', 'ADDRESS', 'FIGCAPTION'
+  ]);
+
+  function isSkippableElement(el) {
+    if (!el || el.nodeType !== 1) return false;
+    const tag = el.tagName;
+    return tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT';
+  }
+
+  function isBlockLike(el) {
+    if (!el || el.nodeType !== 1) return false;
+    const tag = el.tagName;
+    if (tag === 'BR' || isSkippableElement(el)) return false;
+    if (EXPLICIT_BLOCK_TAGS.has(tag)) return true;
+    try {
+      const display = getComputedStyle(el).display;
+      return display === 'block' || display === 'list-item' || display === 'table'
+        || display === 'table-row' || display === 'table-cell' || display === 'flex'
+        || display === 'grid' || display === 'table-caption';
+    } catch (_err) {
+      return false;
+    }
+  }
+
+  function nearestBlock(node) {
+    let el = node && (node.nodeType === 1 ? node : node.parentElement);
+    while (el) {
+      if (isBlockLike(el)) return el;
+      el = el.parentElement;
+    }
+    return document.body || document.documentElement;
+  }
+
+  function isParagraphBoundary(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (PARA_BREAK_TAGS.has(el.tagName)) return true;
+    try {
+      const style = getComputedStyle(el);
+      const mt = parseFloat(style.marginTop) || 0;
+      const pt = parseFloat(style.paddingTop) || 0;
+      if (mt + pt >= 8) return true;
+    } catch (_err) {}
+    return false;
+  }
+
+  function isBlockVisuallyEmpty(el) {
+    if (!el) return false;
+    const text = String(el.innerText || el.textContent || '').replace(/\u00a0/g, ' ').trim();
+    return !text;
+  }
+
+  function readBlockAlign(el) {
+    if (!el) return 'left';
+    try {
+      const style = getComputedStyle(el);
+      const css = CITLayout.normalizeAlign(style.textAlign, style.direction);
+      const attr = el.getAttribute && el.getAttribute('align');
+      const fromAttr = attr ? CITLayout.normalizeAlign(attr, style.direction) : 'left';
+      if (css !== 'left') return css;
+      if (fromAttr !== 'left') return fromAttr;
+      const box = el.getBoundingClientRect();
+      const padL = parseFloat(style.paddingLeft) || 0;
+      const padR = parseFloat(style.paddingRight) || 0;
+      const content = {
+        left: box.left + padL,
+        right: box.right - padR,
+        width: Math.max(0, box.width - padL - padR)
+      };
+      const probe = document.createRange();
+      probe.selectNodeContents(el);
+      const lineRects = serializeRects(probe.getClientRects());
+      return CITLayout.inferAlignFromRects(lineRects, content) || 'left';
+    } catch (_err) {
+      return 'left';
+    }
+  }
+
+  function sliceTextInRange(node, range) {
+    let text = node.nodeValue || '';
+    if (node === range.startContainer && node === range.endContainer) {
+      text = text.slice(range.startOffset, range.endOffset);
+    } else if (node === range.startContainer) {
+      text = text.slice(range.startOffset);
+    } else if (node === range.endContainer) {
+      text = text.slice(0, range.endOffset);
+    }
+    return text.replace(/\u00a0/g, ' ');
+  }
+
+  function rangeIntersects(range, node) {
+    try {
+      return range.intersectsNode(node);
+    } catch (_err) {
+      return false;
+    }
+  }
+
+  function extractBlocksFromRange(range) {
+    if (!range || range.collapsed) return [];
+    const root = range.commonAncestorContainer;
+    const walkerRoot = root.nodeType === 1 ? root : (root.parentNode || document.body);
+    const events = [];
+    let currentText = '';
+    let currentAlign = 'left';
+    let currentBlock = null;
+    let paraBefore = false;
+
+    function flushLine() {
+      const line = currentText.replace(/[ \t]+/g, ' ').trim();
+      currentText = '';
+      if (!line) return false;
+      events.push({ type: 'line', text: line, align: currentAlign, paraBefore });
+      paraBefore = false;
+      return true;
+    }
+
+    function enterBlock(block, forcePara) {
+      if (!block || block === currentBlock) return;
+      flushLine();
+      if (currentBlock && (forcePara || isParagraphBoundary(block) || isParagraphBoundary(currentBlock))) {
+        paraBefore = true;
+      }
+      currentBlock = block;
+      currentAlign = readBlockAlign(block);
+    }
+
+    const walker = document.createTreeWalker(
+      walkerRoot,
+      NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+      {
+        acceptNode(node) {
+          if (node.nodeType === 1) {
+            if (isSkippableElement(node)) return NodeFilter.FILTER_REJECT;
+            if (node.tagName === 'BR' || isBlockLike(node)) {
+              return rangeIntersects(range, node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+            }
+            return NodeFilter.FILTER_SKIP;
+          }
+          if (!node.nodeValue) return NodeFilter.FILTER_REJECT;
+          return rangeIntersects(range, node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+        }
+      }
+    );
+
+    let node;
+    while ((node = walker.nextNode())) {
+      if (node.nodeType === 3) {
+        enterBlock(nearestBlock(node), false);
+        currentText += sliceTextInRange(node, range);
+        if (currentText.includes('\n')) {
+          const parts = currentText.split('\n');
+          currentText = '';
+          for (let i = 0; i < parts.length; i += 1) {
+            if (i === parts.length - 1) {
+              currentText = parts[i];
+            } else {
+              currentText = parts[i];
+              const had = flushLine();
+              if (!had) paraBefore = true;
+            }
+          }
+        }
+        continue;
+      }
+      if (node.tagName === 'BR') {
+        enterBlock(nearestBlock(node), false);
+        const had = flushLine();
+        if (!had || isBlockVisuallyEmpty(nearestBlock(node))) {
+          paraBefore = true;
+        }
+        continue;
+      }
+      if (isBlockLike(node)) {
+        enterBlock(node, isParagraphBoundary(node));
+        if (isBlockVisuallyEmpty(node)) {
+          flushLine();
+          paraBefore = true;
+        }
+      }
+    }
+    flushLine();
+
+    const blocks = [];
+    let lines = [];
+    let align = 'left';
+    const pushPara = () => {
+      while (lines.length && lines[0] === '') lines.shift();
+      while (lines.length && lines[lines.length - 1] === '') lines.pop();
+      if (lines.length) {
+        blocks.push({ align, lines: lines.slice() });
+        lines = [];
+      }
+    };
+    for (const event of events) {
+      if (event.paraBefore) pushPara();
+      if (lines.length && event.align !== align) pushPara();
+      align = event.align || 'left';
+      lines.push(event.text);
+    }
+    pushPara();
+    return blocks;
+  }
+
+  function readFormAlign(form) {
+    try {
+      const style = getComputedStyle(form);
+      return CITLayout.normalizeAlign(style.textAlign, style.direction);
+    } catch (_err) {
+      return 'left';
+    }
+  }
+
   function captureSelectionSnapshot(event) {
     const mouse = { x: event.clientX, y: event.clientY };
     const scrollX = window.scrollX || window.pageXOffset || 0;
@@ -627,6 +860,7 @@ function boot() {
       } catch (_err) {
         // Some input types throw when reading selectionStart.
       }
+      const align = readFormAlign(form);
       return {
         text,
         inFormControl: true,
@@ -635,6 +869,7 @@ function boot() {
         scrollY,
         rects: [],
         range: null,
+        blocks: CITLayout.blocksFromPlainText(text, align),
         time
       };
     }
@@ -646,14 +881,27 @@ function boot() {
       rects: []
     };
 
+    let blocks = [];
+    if (best.range) {
+      try {
+        blocks = extractBlocksFromRange(best.range);
+      } catch (_err) {
+        blocks = [];
+      }
+    }
+    if (!blocks.length && (best.text || '').trim()) {
+      blocks = CITLayout.blocksFromPlainText(best.text, 'left');
+    }
+
     return {
-      text: best.text || '',
+      text: blocks.length ? CITLayout.blocksToSourceText(blocks) : (best.text || ''),
       inFormControl: false,
       mouse,
       scrollX,
       scrollY,
       rects: best.rects || [],
       range: best.range || null,
+      blocks,
       time
     };
   }
@@ -706,7 +954,10 @@ function boot() {
     currentSelectionView = view;
     activeOverlays.add(view);
     view.showLoading();
-    return { ok: true, text };
+    const blocks = (snapshot && snapshot.blocks && snapshot.blocks.length)
+      ? snapshot.blocks
+      : CITLayout.blocksFromPlainText(text, 'left');
+    return { ok: true, text: CITLayout.blocksToSourceText(blocks) || text, blocks };
   }
 
   class FloatPanel {
@@ -795,7 +1046,7 @@ function boot() {
       }, 4000);
     }
 
-    showResult(text) {
+    showResult(text, blocks) {
       this.phase = 'result';
       clearTimeout(this.errorTimer);
       this.clearStage();
@@ -803,7 +1054,32 @@ function boot() {
       this.addToolbar();
       const body = document.createElement('div');
       body.className = 'body';
-      body.textContent = text || '';
+      const paras = (blocks && blocks.length)
+        ? blocks
+        : CITLayout.blocksFromPlainText(text || '', 'left');
+      if (!paras.length) {
+        const para = document.createElement('div');
+        para.className = 'para';
+        const line = document.createElement('div');
+        line.className = 'line';
+        line.textContent = text || '';
+        para.appendChild(line);
+        body.appendChild(para);
+      } else {
+        for (const block of paras) {
+          const para = document.createElement('div');
+          para.className = 'para';
+          para.style.textAlign = block.align || 'left';
+          const lines = block.lines && block.lines.length ? block.lines : [''];
+          for (const item of lines) {
+            const line = document.createElement('div');
+            line.className = 'line';
+            line.textContent = item;
+            para.appendChild(line);
+          }
+          body.appendChild(para);
+        }
+      }
       this.popup.appendChild(body);
       this.bodyEl = body;
       this.syncPosition();
@@ -859,6 +1135,51 @@ function boot() {
       });
     }
 
+    applySize() {
+      const margin = 8;
+      const vw = window.innerWidth || document.documentElement.clientWidth || 320;
+      const vh = window.innerHeight || document.documentElement.clientHeight || 240;
+      const minW = this.phase === 'result' ? 140 : 168;
+      const capW = Math.max(minW, vw - margin * 2);
+
+      this.host.style.height = 'auto';
+      this.host.style.overflow = 'visible';
+      this.host.style.width = 'auto';
+      this.host.style.maxWidth = 'none';
+      if (this.popup) this.popup.style.width = 'max-content';
+      if (this.bodyEl) {
+        this.bodyEl.style.maxHeight = 'none';
+        this.bodyEl.style.overflow = 'visible';
+      }
+
+      let natural = Math.ceil((this.popup || this.host).getBoundingClientRect().width);
+      if (!Number.isFinite(natural) || natural < minW) natural = minW;
+
+      const anchor = this.getAnchor() || {};
+      const source = anchor.sourceRect;
+      const lineCount = this.bodyEl ? this.bodyEl.querySelectorAll('.line').length : 0;
+      let width = Math.min(capW, Math.max(minW, natural));
+      if (this.phase === 'result' && source && source.width >= 80) {
+        const longContent = lineCount >= 3 || natural >= source.width * 0.45;
+        if (longContent) {
+          width = Math.min(capW, Math.max(minW, Math.max(natural, Math.round(source.width))));
+        }
+      }
+      if (this.phase !== 'result') {
+        width = Math.min(width, 240);
+      }
+
+      this.host.style.width = `${width}px`;
+      if (this.popup) this.popup.style.width = '100%';
+
+      const toolbarH = this.toolbar ? this.toolbar.getBoundingClientRect().height : 0;
+      const maxBody = Math.max(72, Math.floor(vh * 0.86) - Math.ceil(toolbarH) - 8);
+      if (this.bodyEl && this.phase === 'result') {
+        this.bodyEl.style.maxHeight = `${maxBody}px`;
+        this.bodyEl.style.overflow = 'auto';
+      }
+    }
+
     placeAt(left, top) {
       const margin = 8;
       const vw = window.innerWidth || document.documentElement.clientWidth || 320;
@@ -877,14 +1198,15 @@ function boot() {
         this.destroy();
         return;
       }
-      if (this.userMoved) return;
+      this.applySize();
+      if (this.userMoved) {
+        const rect = this.host.getBoundingClientRect();
+        this.placeAt(rect.left, rect.top);
+        return;
+      }
       const margin = 8;
       const vw = window.innerWidth || document.documentElement.clientWidth || 320;
       const vh = window.innerHeight || document.documentElement.clientHeight || 240;
-      const maxW = Math.min(420, Math.max(200, vw - margin * 2));
-      this.host.style.width = `${maxW}px`;
-      this.host.style.height = 'auto';
-      this.host.style.overflow = 'visible';
 
       const anchor = this.getAnchor() || { x: 24, y: 24 };
       this.host.style.left = `${Math.max(margin, anchor.x)}px`;

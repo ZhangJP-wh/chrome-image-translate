@@ -176,13 +176,28 @@ function groupUnits(data, invScale, imageWidth, imageHeight) {
   const units = [];
   const collected = collectFromBlocks(data);
 
-  for (const paragraph of collected.paragraphs) {
-    pushUnit(units, paragraph.text, paragraph.bbox, paragraph.confidence, invScale);
+  // Prefer line boxes so the floating window can keep the original line breaks.
+  const seen = new Set();
+  const pushUnique = (item, text, bbox, confidence) => {
+    const before = units.length;
+    pushUnit(units, text, bbox, confidence, invScale);
+    if (units.length === before) return;
+    const last = units[units.length - 1];
+    const key = [last.text, Math.round(last.bbox.x0), Math.round(last.bbox.y0), Math.round(last.bbox.x1), Math.round(last.bbox.y1)].join('\t');
+    if (seen.has(key)) {
+      units.pop();
+      return;
+    }
+    seen.add(key);
+  };
+
+  for (const line of collected.lines) {
+    pushUnique(line, line.text, line.bbox, line.confidence);
   }
   if (units.length) return units;
 
-  for (const line of collected.lines) {
-    pushUnit(units, line.text, line.bbox, line.confidence, invScale);
+  for (const paragraph of collected.paragraphs) {
+    pushUnique(paragraph, paragraph.text, paragraph.bbox, paragraph.confidence);
   }
   if (units.length) return units;
 
