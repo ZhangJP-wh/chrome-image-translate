@@ -34,7 +34,7 @@ function boot() {
     }
     if (message.type === 'CIT_FETCH_FROM_PAGE') {
       fetchBytesFromPage(message.url).then((data) => {
-        sendResponse({ ok: true, buffer: data.buffer, mime: data.mime });
+        sendResponse({ ok: true, bufferB64: data.bufferB64, mime: data.mime });
       }).catch((err) => {
         sendResponse({ ok: false, error: (err && err.message) || '无法读取这张图片' });
       });
@@ -193,8 +193,13 @@ function boot() {
     if (!buffer.byteLength) {
       throw new Error('无法读取这张图片');
     }
-    const mime = (res.headers.get('content-type') || '').split(';')[0].trim() || guessMimeFromUrl(url);
-    return { buffer, mime };
+    const headerMime = (res.headers.get('content-type') || '').split(';')[0].trim() || guessMimeFromUrl(url);
+    const sniffed = citSniffMime(buffer);
+    if (sniffed === 'text/html') {
+      throw new Error('无法读取这张图片');
+    }
+    const mime = sniffed.startsWith('image/') ? sniffed : headerMime;
+    return { bufferB64: citEncodeBuffer(buffer), mime };
   }
 
   function guessMimeFromUrl(url) {
@@ -221,7 +226,7 @@ function boot() {
           else reject(new Error('无法读取这张图片'));
         }, 'image/png');
       });
-      return { buffer: await blob.arrayBuffer(), mime: 'image/png' };
+      return { bufferB64: citEncodeBuffer(await blob.arrayBuffer()), mime: 'image/png' };
     } catch (_err) {
       return null;
     }

@@ -47,7 +47,16 @@ async function imageFromBlob(blob) {
 }
 
 async function rasterize(buffer, mime) {
-  const type = mime && String(mime).startsWith('image/') ? mime : 'image/png';
+  if (!buffer || !buffer.byteLength) {
+    throw new Error('无法解码图片');
+  }
+  const sniffed = citSniffMime(buffer);
+  if (sniffed === 'text/html') {
+    throw new Error('无法解码图片');
+  }
+  const type = sniffed.startsWith('image/')
+    ? sniffed
+    : (mime && String(mime).startsWith('image/') ? mime : 'image/png');
   const blob = new Blob([buffer], { type });
   const bitmap = await imageFromBlob(blob);
   const srcW = bitmap.width;
@@ -215,7 +224,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   (async () => {
     try {
-      const result = await runOcr(message.buffer, message.mime);
+      const buffer = citDecodeBuffer(message.bufferB64);
+      const result = await runOcr(buffer, message.mime);
       sendResponse({ ok: true, result });
     } catch (err) {
       sendResponse({ ok: false, error: (err && err.message) || '文字识别失败' });

@@ -1,6 +1,8 @@
 /* 图片翻译 - service worker */
 'use strict';
 
+importScripts('buffer-codec.js');
+
 const MENU_ID = 'cit-translate-image';
 const TARGET_LANG = 'zh-CN';
 const TRANSLATE_URL = 'https://translate-pa.googleapis.com/v1/translateHtml';
@@ -35,24 +37,7 @@ function friendlyError(err, fallback) {
 }
 
 function sniffMime(buffer) {
-  const u = new Uint8Array(buffer);
-  if (u.length >= 8 && u[0] === 0x89 && u[1] === 0x50 && u[2] === 0x4e && u[3] === 0x47) {
-    return 'image/png';
-  }
-  if (u.length >= 3 && u[0] === 0xff && u[1] === 0xd8 && u[2] === 0xff) {
-    return 'image/jpeg';
-  }
-  if (u.length >= 6 && u[0] === 0x47 && u[1] === 0x49 && u[2] === 0x46) {
-    return 'image/gif';
-  }
-  if (u.length >= 12 && u[0] === 0x52 && u[1] === 0x49 && u[2] === 0x46 && u[3] === 0x46 &&
-      u[8] === 0x57 && u[9] === 0x45 && u[10] === 0x42 && u[11] === 0x50) {
-    return 'image/webp';
-  }
-  if (u.length >= 2 && u[0] === 0x42 && u[1] === 0x4d) {
-    return 'image/bmp';
-  }
-  return 'application/octet-stream';
+  return citSniffMime(buffer);
 }
 
 let offscreenPromise = null;
@@ -115,8 +100,14 @@ async function fetchImage(url) {
     throw new Error('图片下载失败（空文件）');
   }
   let mime = (res.headers.get('content-type') || '').split(';')[0].trim();
-  if (!mime || mime === 'application/octet-stream' || mime === 'binary/octet-stream') {
-    mime = sniffMime(buffer);
+  const sniffed = sniffMime(buffer);
+  if (sniffed === 'text/html') {
+    throw new Error('图片下载失败（返回了网页而不是图片）');
+  }
+  if (sniffed.startsWith('image/')) {
+    mime = sniffed;
+  } else if (!mime || mime === 'application/octet-stream' || mime === 'binary/octet-stream') {
+    mime = sniffed;
   }
   return { buffer, mime };
 }
@@ -127,7 +118,7 @@ async function ocrImage(buffer, mime) {
     setTimeout(() => reject(new Error('识别超时，请稍后重试')), OCR_TIMEOUT_MS);
   });
   const response = await Promise.race([
-    chrome.runtime.sendMessage({ type: 'CIT_OCR', mime, buffer }),
+    chrome.runtime.sendMessage({ type: 'CIT_OCR', mime, bufferB64: citEncodeBuffer(buffer) }),
     timeout
   ]);
   if (!response || !response.ok) {
@@ -223,7 +214,7 @@ async function handleTranslateClick(info, tab) {
       throw new Error((prepared && prepared.error) || '找不到要翻译的图片');
     }
 
-    let buffer = prepared.buffer || null;
+    let buffer = prepared.bufferB64 ? citDecodeBuffer(prepared.bufferB64) : null;
     let mime = prepared.mime || '';
 
     if (!buffer && prepared.url) {
@@ -237,10 +228,10 @@ async function handleTranslateClick(info, tab) {
           requestId,
           url: prepared.url
         });
-        if (!again || !again.ok || !again.buffer) {
+        if (!again || !again.ok || !again.bufferB64) {
           throw err;
         }
-        buffer = again.buffer;
+        buffer = citDecodeBuffer(again.bufferB64);
         mime = again.mime || mime;
       }
     }
@@ -250,6 +241,9 @@ async function handleTranslateClick(info, tab) {
     }
     if (!mime || mime === 'application/octet-stream') {
       mime = sniffMime(buffer);
+    }
+    if (mime === 'text/html') {
+      throw new Error('无法读取这张图片');
     }
 
     const ocr = await ocrImage(buffer, mime);

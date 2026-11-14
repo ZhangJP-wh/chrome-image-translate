@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "图片翻译",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "在网页图片上右键「翻译」，识别图中的文字并以简体中文覆盖在原图对应位置。",
   "permissions": [
     "contextMenus",
@@ -38,6 +38,7 @@
         "https://*/*"
       ],
       "js": [
+        "buffer-codec.js",
         "content.js"
       ],
       "all_frames": true,

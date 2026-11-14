@@ -7,7 +7,7 @@ Right-click an image → **翻译**, and Simplified Chinese is overlaid on the o
 菜单项前面的图标使用谷歌翻译的产品图标（Chrome 会把扩展图标显示在右键菜单项旁边）。
 
 **仓库 / Repo:** https://github.com/ZhangJP-wh/chrome-image-translate  
-**版本 / Version:** 0.1.0（见 `manifest.json`）
+**版本 / Version:** 0.1.1（见 `manifest.json`）
 
 ## 给电脑小白：一分钟安装（Mac 和 Windows 相同）
 
