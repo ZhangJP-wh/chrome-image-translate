@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <title>图片翻译</title>
+    <style>
+      :root { color-scheme: light; }
+      body {
+        margin: 0;
+        width: 280px;
+        font: 13px/1.55 "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+        color: #202124;
+        background: #fff;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 14px 8px;
+      }
+      header img { width: 24px; height: 24px; }
+      h1 { margin: 0; font-size: 15px; font-weight: 650; }
+      ol, p { margin: 0; }
+      ol { padding: 0 14px 12px 32px; }
+      li { margin: 4px 0; }
+      .hint {
+        padding: 8px 14px 14px;
+        color: #5f6368;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <img src="icons/icon32.png" alt="">
+      <h1>图片翻译</h1>
+    </header>
+    <ol>
+      <li>在网页的图片上点击鼠标右键</li>
+      <li>选择菜单里的「翻译」</li>
+      <li>简体中文会直接覆盖在原图对应文字上</li>
+      <li>可用「显示原文 / 显示译文」切换，或点「关闭」去掉覆盖层</li>
+    </ol>
+    <p class="hint">第一次翻译可能需要几秒来加载识别组件。请尽量选择文字清晰的图片。</p>
+  </body>
+</html>

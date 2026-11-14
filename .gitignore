@@ -1,0 +1,25 @@
+# macOS / Windows
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# Logs and local packaging leftovers
+*.log
+*.zip
+*.crx
+*.pem
+
+# Not used by this extension (it loads unpacked, no build step)
+node_modules/
