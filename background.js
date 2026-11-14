@@ -6,6 +6,7 @@ importScripts('buffer-codec.js');
 const MENU_ROOT_ID = 'cit-translate-root';
 const MENU_GOOGLE_ID = 'cit-translate-google';
 const MENU_BING_ID = 'cit-translate-bing';
+const MENU_HINT_ID = 'cit-menu-hint';
 const TARGET_LANG = 'zh-CN';
 const TRANSLATE_URL = 'https://translate-pa.googleapis.com/v1/translateHtml';
 // Public te_lib client key embedded in Google's official translate library (not a user secret).
@@ -53,6 +54,12 @@ async function setupMenus() {
       id: MENU_BING_ID,
       parentId: MENU_ROOT_ID,
       title: '必应翻译',
+      contexts: MENU_CONTEXTS
+    });
+    chrome.contextMenus.create({
+      id: MENU_HINT_ID,
+      parentId: MENU_ROOT_ID,
+      title: '提示：在扩展设置里只勾选一项，可去掉二级菜单',
       contexts: MENU_CONTEXTS
     });
     return;
@@ -427,7 +434,21 @@ async function sendToFrame(tabId, frameId, message) {
   return chrome.tabs.sendMessage(tabId, message, { frameId });
 }
 
+async function openSettingsPopup() {
+  try {
+    if (chrome.action && chrome.action.openPopup) {
+      await chrome.action.openPopup();
+    }
+  } catch (_err) {
+    // Popup can only open from a user gesture in recent Chrome; ignore if unavailable.
+  }
+}
+
 chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId === MENU_HINT_ID) {
+    openSettingsPopup();
+    return;
+  }
   if (info.menuItemId !== MENU_GOOGLE_ID && info.menuItemId !== MENU_BING_ID) return;
   if (!tab || tab.id == null) return;
   handleTranslateClick(info, tab);
