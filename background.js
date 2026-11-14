@@ -667,7 +667,10 @@ async function handleImageTranslate(info, tab, engine) {
     }
 
     const ocr = await ocrImage(buffer, mime);
-    const units = (ocr && ocr.units) || [];
+    const rawUnits = (ocr && ocr.units) || [];
+    // Drop stray glyphs (logo marks, lone symbols) and strip bullet symbols
+    // before translating, so the panel can render real list items.
+    const units = CITLayout.prepareOcrUnits(rawUnits).filter((unit) => !unit.noise && unit.text);
     if (!units.length) {
       await reportError('未识别到文字');
       return;
@@ -679,7 +682,10 @@ async function handleImageTranslate(info, tab, engine) {
     const boxes = units.map((unit, index) => ({
       text: translations[index] || unit.text,
       source: unit.text,
-      bbox: unit.bbox
+      bbox: unit.bbox,
+      confidence: unit.confidence,
+      bullet: !!unit.bullet,
+      noise: false
     }));
 
     await sendToFrame(tabId, frameId, {

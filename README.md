@@ -5,7 +5,7 @@ Chrome / Edge 扩展：在网页**图片**或**选中的文字**上右键「翻�
 Chrome / Edge extension: right-click an **image** or **selected text** → **翻译** → **谷歌翻译** or **必应翻译**. The translation appears in a draggable floating window on the same page, without covering the original and without opening a new tab. Non-Chinese text is translated into Simplified Chinese; Simplified Chinese is translated into English.
 
 **仓库 / Repo:** https://github.com/ZhangJP-wh/chrome-image-translate  
-**版本 / Version:** **0.1.11**（见 `manifest.json`）
+**版本 / Version:** **0.1.12**（见 `manifest.json`）
 
 ### 一句话场景 / What it’s for
 
@@ -21,6 +21,10 @@ Chrome / Edge extension: right-click an **image** or **selected text** → **翻
   Drag the floating window, select text inside it, or click **关闭** to dismiss
 - 小窗会按译文长短自动伸缩，并尽量保持原文的分段、换行和对齐，方便对照学习；小窗会出现在选中的文字或图片旁边，而不是浏览器窗口最上方  
   The window resizes to the translation and keeps the original paragraphs, line breaks, and alignment as closely as possible, so you can compare them. It appears next to the selected text or image, not at the top of the browser window
+- 翻译图片时，小窗按原图的文字栏来排：标题更大更醒目、项目符号保留成列表、段落间距照原图；小窗宽度接近原图文字栏，放在图片旁边或图片的空白处，不盖住原文  
+  For images, the window follows the image's text column: larger headings, real bullet lists, and the original paragraph gaps. It is about as wide as the text column and sits beside the image or over its empty area, without covering the text
+- 页面上下滚动时，小窗跟着内容一起走；刷新、关闭页面、切换到别的页面，或关掉图片的大图预览时，小窗自动关闭，也可按 Esc 关闭  
+  The window scrolls with the page content. It closes by itself when you refresh or close the page, navigate away, or close the image preview, and Esc closes it too
 
 示例图（虚构英文句子，不是真实网页截图）：
 
@@ -116,6 +120,10 @@ See also [`AGENT_INSTALL.md`](./AGENT_INSTALL.md).
 | 不是中文一律译成简体中文；原文是简体中文则译成英文 | Non-Chinese text is translated into Simplified Chinese; Simplified Chinese is translated into English |
 | 悬浮小窗可以拖动，窗里的文字可以选中复制，点「关闭」去掉 | The window can be dragged, its text can be selected, and **关闭** dismisses it |
 | 小窗大小随译文长短自动调节；分段、换行尽量与原文一一对应，左对齐 / 右对齐 / 居中也尽量保持一致，方便中英文对照 | The window resizes to the translation; paragraphs, line breaks, and left / right / center alignment follow the original as closely as possible, for side-by-side comparison |
+| 图片译文按原图的文字栏排版：以文字栏（而不是整张图）判断左对齐 / 居中 / 右对齐，标题加大加粗，项目符号显示成带悬挂缩进的列表，段落间距按原图；Logo 之类的零散字符会被略去 | Image translations follow the image's text column: alignment is judged against the column (not the whole image), headings are larger and bold, bullets become a list with a hanging indent, paragraph gaps follow the original, and stray glyphs such as logos are dropped |
+| 图片译文小窗宽度接近原图文字栏，优先放在图片右侧、其次左侧；图片几乎铺满窗口时（如 X 的大图预览），放在不盖住文字的空白处 | The image window is about as wide as the text column, placed right of the image, then left; when the image nearly fills the window (e.g. X's photo viewer), it goes into an empty area that does not cover the text |
+| 小窗随页面内容一起滚动（包括页面里的滚动区域），拖动后的位置也跟着内容走 | The window scrolls with the page content (including scrollable areas inside the page), and keeps its dragged position relative to the content |
+| 刷新、关闭页面、单页应用跳转、原图被关闭或隐藏时，小窗自动关闭；按 Esc 也可关闭 | The window closes on refresh, page close, single-page-app navigation, or when the source image is closed or hidden; Esc also closes it |
 | 全程留在当前页，不打开新标签 | Stays on the current page; no new tab |
 | 「必应翻译」排在「谷歌翻译」下面，面向中国大陆等谷歌可能无法访问的网络，无需申请密钥 | **必应翻译** sits below **谷歌翻译** for networks where Google is unreachable (e.g. mainland China); no API key to apply for |
 | 图片识别（OCR）在本地完成，不依赖 CDN；选中文字不经过 OCR | Image OCR runs locally with no CDN; selected text skips OCR |
@@ -132,6 +140,14 @@ See also [`AGENT_INSTALL.md`](./AGENT_INSTALL.md).
 The extension finds text in an image locally, translates it with the engine you picked, and shows the result in an on-page floating window. Selected page text is translated directly (no OCR) and shown the same way. Non-Chinese text, including Traditional Chinese, is translated into Simplified Chinese; Simplified Chinese is translated into English. The window is draggable, its text is selectable, and it does not cover the original. It also resizes to the translation: a long letter gets a taller window, a short snippet stays compact. Paragraphs, line breaks, and alignment (left, right, or center) follow the original as closely as possible, so you can compare the two side by side.
 
 默认情况下，图片和选中文字共用同一个「翻译」菜单：点开后先是「谷歌翻译」，下面是「必应翻译」。也可以在工具栏弹出页里只勾选其中一项，这时该项会直接出现在右键一级菜单，不再经过二级菜单。前者走 Google 翻译，在中国大陆往往需要可访问 Google 的网络；后者走必应翻译的公开网页通道（通常会落到 `cn.bing.com`），在中国大陆一般可直接使用，也不需要用户自己申请密钥。
+
+图片翻译时，扩展会先从识别出的每一行的位置找出原图的文字栏（例如一封居中的单栏邮件），再相对这一栏判断对齐：共用同一左边线的行都按左对齐，即使很短、或这一栏整体偏右；只有确实居中或右边线对齐的行才居中或右对齐。比正文明显高的行当作标题，加大加粗显示；以「•」「+」等符号开头、下一行悬挂缩进的行显示成列表项；段落之间的空隙按原图的行距来定。邮件顶部的标题、发件人这类离正文较远的内容，会作为单独的一块放在最前面。Logo 之类的单个零散字符会被略去，不再送去翻译。小窗宽度接近原图文字栏在屏幕上的宽度，优先放在图片右侧，其次左侧；放不下时，放在不盖住文字的空白处，最后才会叠在图上。
+
+For images, the extension first finds the image's text column from the positions of the recognized lines (for example a centered single-column email), then judges alignment against that column: lines sharing a left edge are left-aligned even when short or when the column sits right of center; only lines that are really centered or share a right edge are centered or right-aligned. Lines clearly taller than body text become larger, bold headings; lines starting with a symbol such as “•” or “+” with a hanging indent below become list items; paragraph gaps follow the original line spacing. Content far from the main column, such as an email's subject and sender at the top, is kept as its own block first. Stray single glyphs such as logos are dropped and not translated. The window is about as wide as the text column on screen, placed right of the image, then left; if neither fits, it goes into an empty area that does not cover the text, and overlaps the image only as a last resort.
+
+悬浮小窗跟着页面内容走：上下滚动页面，或滚动页面里的某个滚动区域，小窗都和原图或原文保持相对位置；拖动之后也是如此。刷新、关闭页面、浏览器前进后退、单页网站切换页面，或原图被移除、隐藏（例如关掉 X 的大图预览）时，小窗会自动关闭；按 Esc 也会关闭。
+
+The floating window moves with the page content: when you scroll the page or a scrollable area inside it, the window keeps its position relative to the image or text, also after you drag it. It closes by itself on refresh, page close, back/forward, single-page-app navigation, or when the source image is removed or hidden (for example closing X's photo viewer). Esc closes it too.
 
 By default, images and selected text share one **翻译** submenu: **谷歌翻译** first, then **必应翻译**. In the toolbar popup you can enable only one engine, which then appears as a top-level context-menu item with no submenu. Google Translate usually needs a network that can reach Google. Bing uses the public translator page (often `cn.bing.com`) and typically works in mainland China without an API key.
 
@@ -213,6 +229,15 @@ Do not use real browsing history, private URLs, or real account data in README/r
 ---
 
 ## 变更 / Changelog
+
+### v0.1.12
+
+- 图片译文按原图的文字栏来排：以文字栏判断对齐，不再把同一封信拆成左、中、右几摊；标题加大加粗，项目符号显示成带悬挂缩进的列表，段落间距照原图，Logo 之类的零散字符不再出现  
+  Image translations now follow the image's text column: alignment is judged against the column, so one letter is no longer split into left, center, and right pieces. Headings are larger and bold, bullets become a list with a hanging indent, paragraph gaps follow the original, and stray glyphs such as logos are dropped
+- 图片译文小窗宽度接近原图文字栏，放在图片旁边；图片几乎铺满窗口时，放在不盖住文字的空白处  
+  The image window is about as wide as the text column and sits beside the image; when the image nearly fills the window, it goes into an empty area that does not cover the text
+- 小窗随页面内容一起滚动，拖动后的位置也跟着内容走；刷新、关闭页面、切换页面、关掉大图预览时自动关闭，按 Esc 也可关闭  
+  The window now scrolls with the page content, including after you drag it. It closes on refresh, page close, navigation, or when the image preview closes, and Esc closes it too
 
 ### v0.1.11
 

@@ -114,7 +114,14 @@ function boot() {
       if (overlay) {
         const joined = (message.text != null && String(message.text))
           || (message.boxes || []).map((item) => (item && item.text) ? String(item.text) : '').join('\n');
-        const blocks = CITLayout.groupOcrBoxes(message.boxes || [], message.imageWidth || 0);
+        const layout = CITLayout.layoutOcrBoxes(message.boxes || [], message.imageWidth || 0);
+        const blocks = layout.blocks || [];
+        overlay.ocrLayout = layout.column ? {
+          column: layout.column,
+          textRects: layout.textRects || [],
+          imageWidth: message.imageWidth || 0,
+          imageHeight: message.imageHeight || 0
+        } : null;
         overlay.showResult(joined, blocks.length ? blocks : null);
       }
       return undefined;
@@ -230,7 +237,12 @@ function boot() {
 
     let overlay = overlays.get(img);
     if (overlay) overlay.destroy();
-    overlay = new FloatPanel(message.requestId, () => anchorFromImage(img), { img });
+    let created = null;
+    created = new FloatPanel(message.requestId, () => anchorFromImage(img, created && created.ocrLayout), {
+      img,
+      anchorEl: img
+    });
+    overlay = created;
     overlays.set(img, overlay);
     activeOverlays.add(overlay);
     overlay.showLoading();
@@ -484,6 +496,24 @@ function boot() {
     }
     .para:last-child {
       margin-bottom: 0;
+    }
+    .para.is-ocr {
+      margin-bottom: 0;
+    }
+    .para.is-heading {
+      font-weight: 600;
+      line-height: 1.4;
+    }
+    .para.is-bullet {
+      position: relative;
+      padding-left: calc(var(--cit-indent, 0px) + 1.25em);
+    }
+    .para.is-bullet::before {
+      content: "•";
+      position: absolute;
+      left: calc(var(--cit-indent, 0px) + 0.25em);
+      top: 0;
+      line-height: 1.55;
     }
     .line {
       white-space: pre-wrap;
@@ -1224,6 +1254,7 @@ function boot() {
       return {
         text,
         inFormControl: true,
+        formEl: form,
         mouse,
         scrollX,
         scrollY,
@@ -1305,12 +1336,69 @@ function boot() {
     return { mouse, sourceRect, prefer: 'below' };
   }
 
-  function anchorFromImage(img) {
+  function anchorFromImage(img, layout) {
     if (!isElementCurrent(img)) {
       return { prefer: 'right' };
     }
     const r = img.getBoundingClientRect();
-    return { sourceRect: r, prefer: 'right' };
+    const anchor = { sourceRect: r, prefer: 'right' };
+    if (!layout || !layout.column || !(layout.imageWidth > 0)) return anchor;
+    try {
+      const m = getImageMapping(img);
+      if (!(m.cssWidth > 1 && m.cssHeight > 1)) return anchor;
+      const ratioX = (m.nw || layout.imageWidth) / layout.imageWidth;
+      const ratioY = layout.imageHeight > 0 ? (m.nh || layout.imageHeight) / layout.imageHeight : ratioX;
+      const imageRect = {
+        left: m.cssLeft,
+        top: m.cssTop,
+        width: m.cssWidth,
+        height: m.cssHeight,
+        right: m.cssLeft + m.cssWidth,
+        bottom: m.cssTop + m.cssHeight
+      };
+      const toScreen = (b) => {
+        const left = m.cssLeft + (b.x0 * ratioX - m.originX) * m.scaleX;
+        const top = m.cssTop + (b.y0 * ratioY - m.originY) * m.scaleY;
+        const right = m.cssLeft + (b.x1 * ratioX - m.originX) * m.scaleX;
+        const bottom = m.cssTop + (b.y1 * ratioY - m.originY) * m.scaleY;
+        return CITLayout.intersectRect({
+          left,
+          top,
+          width: Math.max(0, right - left),
+          height: Math.max(0, bottom - top)
+        }, imageRect);
+      };
+      const columnRect = toScreen(layout.column);
+      if (!columnRect) return anchor;
+      anchor.imageRect = imageRect;
+      anchor.columnRect = columnRect;
+      anchor.textRects = (layout.textRects || []).map(toScreen).filter(Boolean);
+      // Panel = text column width plus the panel's own padding/border.
+      anchor.preferWidth = Math.round(columnRect.width + 30);
+    } catch (_err) {}
+    return anchor;
+  }
+
+  function selectionAnchorElement(snapshot) {
+    if (!snapshot) return null;
+    if (snapshot.formEl && snapshot.formEl.isConnected) return snapshot.formEl;
+    let node = null;
+    try {
+      node = snapshot.range && snapshot.range.startContainer;
+    } catch (_err) {
+      node = null;
+    }
+    let el = node && (node.nodeType === 1 ? node : node.parentElement);
+    for (let i = 0; el && i < 6; i += 1) {
+      try {
+        if (el.isConnected) {
+          const r = el.getBoundingClientRect();
+          if (r.width >= 1 && r.height >= 1) return el;
+        }
+      } catch (_err) {}
+      el = el.parentElement;
+    }
+    return null;
   }
 
   function handlePrepareSelection(message) {
@@ -1344,7 +1432,9 @@ function boot() {
       return { ok: false, error: '没有可翻译的文字' };
     }
     if (currentSelectionView) currentSelectionView.destroy();
-    const view = new FloatPanel(message.requestId, () => chooseAnchor(snapshot));
+    const view = new FloatPanel(message.requestId, () => chooseAnchor(snapshot), {
+      anchorEl: selectionAnchorElement(snapshot)
+    });
     currentSelectionView = view;
     activeOverlays.add(view);
     view.showLoading();
@@ -1354,15 +1444,64 @@ function boot() {
     return { ok: true, text: CITLayout.blocksToSourceText(blocks) || text, blocks };
   }
 
+  function currentRouteKey() {
+    try {
+      const u = new URL(location.href);
+      const h = u.hash || '';
+      const hashRoute = (h.startsWith('#/') || h.startsWith('#!')) ? h : '';
+      return u.origin + u.pathname + u.search + hashRoute;
+    } catch (_err) {
+      return String(location.href || '');
+    }
+  }
+
+  function destroyAllPanels() {
+    for (const overlay of [...activeOverlays]) {
+      try {
+        overlay.destroy();
+      } catch (_err) {}
+    }
+    try {
+      document.querySelectorAll('[data-cit-float]').forEach((node) => node.remove());
+    } catch (_err) {}
+  }
+
+  // Close the floating window on refresh / close / back-forward cache, SPA
+  // navigation, and Escape.
+  window.addEventListener('pagehide', destroyAllPanels, true);
+  window.addEventListener('beforeunload', destroyAllPanels, true);
+  window.addEventListener('pageshow', (event) => {
+    if (event && event.persisted) destroyAllPanels();
+  }, true);
+  const onRouteMaybeChanged = () => {
+    for (const overlay of [...activeOverlays]) overlay.checkAlive();
+  };
+  window.addEventListener('popstate', onRouteMaybeChanged, true);
+  window.addEventListener('hashchange', onRouteMaybeChanged, true);
+  window.addEventListener('keydown', (event) => {
+    if (!event || event.key !== 'Escape' || event.isComposing) return;
+    if (activeOverlays.size) destroyAllPanels();
+  }, true);
+
   class FloatPanel {
     constructor(requestId, getAnchor, options) {
       this.requestId = requestId;
       this.getAnchor = typeof getAnchor === 'function' ? getAnchor : () => ({ x: 24, y: 24 });
       this.img = options && options.img ? options.img : null;
+      this.anchorEl = options && options.anchorEl ? options.anchorEl : this.img;
       this.destroyed = false;
       this.errorTimer = 0;
       this.userMoved = false;
+      this.dragging = false;
       this.phase = 'loading';
+      this.ocrLayout = null;
+      // Panel position relative to the anchor's reference point, so the panel
+      // moves with page content (window scroll and nested scroll containers).
+      this.offset = null;
+      this.lastRef = null;
+      this.pos = null;
+      this.missingTicks = 0;
+      this.routeKey = currentRouteKey();
 
       this.host = document.createElement('div');
       this.host.setAttribute('data-cit-float', '1');
@@ -1390,13 +1529,21 @@ function boot() {
       this.shadow.append(style, this.wrap);
       (document.documentElement || document.body).appendChild(this.host);
 
-      this.onSync = () => this.syncPosition();
-      window.addEventListener('resize', this.onSync, true);
-      document.addEventListener('scroll', this.onSync, true);
+      this.onResize = () => this.handleResize();
+      this.onScroll = () => this.follow();
+      window.addEventListener('resize', this.onResize, true);
+      document.addEventListener('scroll', this.onScroll, true);
       if (window.visualViewport) {
-        window.visualViewport.addEventListener('resize', this.onSync);
-        window.visualViewport.addEventListener('scroll', this.onSync);
+        window.visualViewport.addEventListener('resize', this.onResize);
+        window.visualViewport.addEventListener('scroll', this.onScroll);
       }
+      this.tick = () => {
+        if (this.destroyed) return;
+        this.follow();
+        this.rafId = requestAnimationFrame(this.tick);
+      };
+      this.rafId = requestAnimationFrame(this.tick);
+      this.aliveTimer = setInterval(() => this.checkAlive(), 400);
     }
 
     clearStage() {
@@ -1420,7 +1567,7 @@ function boot() {
       body.append(spinner, label);
       this.popup.appendChild(body);
       this.bodyEl = body;
-      this.syncPosition();
+      this.place();
     }
 
     showError(message) {
@@ -1433,7 +1580,7 @@ function boot() {
       body.textContent = message || '翻译失败，请稍后重试';
       this.popup.appendChild(body);
       this.bodyEl = body;
-      this.syncPosition();
+      this.place();
       clearTimeout(this.errorTimer);
       this.errorTimer = setTimeout(() => {
         if (!this.destroyed) this.destroy();
@@ -1464,6 +1611,24 @@ function boot() {
           const para = document.createElement('div');
           para.className = 'para';
           para.style.textAlign = block.align || 'left';
+          if (block.kind) {
+            // Image OCR layout: headings, bullets, indents, original gaps.
+            para.classList.add('is-ocr', `is-${block.kind}`);
+            if (block.region === 'aside') para.classList.add('is-aside');
+            if (block.kind === 'heading' && Number(block.scale) > 1) {
+              para.style.fontSize = `${Math.min(1.6, Number(block.scale))}em`;
+            }
+            const gap = Number(block.gapBefore);
+            para.style.marginTop = Number.isFinite(gap)
+              ? `${Math.min(1.6, Math.max(0.3, gap * 0.55)).toFixed(2)}em`
+              : '0';
+            const indent = Number(block.indent);
+            if (indent > 0) {
+              const pct = `${(Math.min(0.4, indent) * 100).toFixed(1)}%`;
+              if (block.kind === 'bullet') para.style.setProperty('--cit-indent', pct);
+              else para.style.paddingLeft = pct;
+            }
+          }
           const lines = block.lines && block.lines.length ? block.lines : [''];
           for (const item of lines) {
             const line = document.createElement('div');
@@ -1476,7 +1641,7 @@ function boot() {
       }
       this.popup.appendChild(body);
       this.bodyEl = body;
-      this.syncPosition();
+      this.place();
     }
 
     buildPopup(kind) {
@@ -1514,6 +1679,7 @@ function boot() {
         const dx = event.clientX - rect.left;
         const dy = event.clientY - rect.top;
         this.userMoved = true;
+        this.dragging = true;
         const onMove = (ev) => {
           if (this.destroyed) return;
           this.placeAt(ev.clientX - dx, ev.clientY - dy);
@@ -1522,6 +1688,11 @@ function boot() {
           window.removeEventListener('pointermove', onMove, true);
           window.removeEventListener('pointerup', onUp, true);
           window.removeEventListener('pointercancel', onUp, true);
+          this.dragging = false;
+          if (this.destroyed) return;
+          const r = this.host.getBoundingClientRect();
+          this.placeAt(r.left, r.top);
+          this.rememberOffset();
         };
         window.addEventListener('pointermove', onMove, true);
         window.addEventListener('pointerup', onUp, true);
@@ -1555,7 +1726,10 @@ function boot() {
       const sourceW = (source && source.width >= 80) ? Math.round(source.width) : 0;
       const maxReasonable = Math.min(capW, Math.max(sourceW, Math.round(Math.min(vw * 0.5, 560)), 420));
       let width = Math.min(maxReasonable, Math.max(minW, natural));
-      if (this.phase === 'result' && sourceW) {
+      if (this.phase === 'result' && anchor.preferWidth > 0) {
+        // Image OCR: as wide as the original text column on screen.
+        width = Math.min(capW, Math.max(Math.min(260, capW), Math.round(anchor.preferWidth)));
+      } else if (this.phase === 'result' && sourceW) {
         const longContent = lineCount >= 2 || natural >= sourceW * 0.45;
         if (longContent) {
           width = Math.min(capW, Math.max(width, sourceW));
@@ -1574,8 +1748,16 @@ function boot() {
         this.bodyEl.style.maxHeight = `${maxBody}px`;
         this.bodyEl.style.overflow = 'auto';
       }
+      return width;
     }
 
+    setHostPos(left, top) {
+      this.pos = { x: left, y: top };
+      this.host.style.left = `${Math.round(left * 10) / 10}px`;
+      this.host.style.top = `${Math.round(top * 10) / 10}px`;
+    }
+
+    // Clamp into the viewport: used only for initial placement and dragging.
     placeAt(left, top) {
       const margin = 8;
       const vw = window.innerWidth || document.documentElement.clientWidth || 320;
@@ -1584,53 +1766,155 @@ function boot() {
       const h = this.host.offsetHeight || 0;
       left = Math.min(Math.max(margin, left), Math.max(margin, vw - w - margin));
       top = Math.min(Math.max(margin, top), Math.max(margin, vh - h - margin));
-      this.host.style.left = `${left}px`;
-      this.host.style.top = `${top}px`;
+      this.setHostPos(left, top);
     }
 
-    syncPosition() {
+    refPoint() {
+      const el = this.anchorEl;
+      if (el) {
+        try {
+          if (el.isConnected) {
+            const r = el.getBoundingClientRect();
+            if (r.width >= 1 || r.height >= 1) {
+              this.lastRef = { x: r.left, y: r.top };
+              return this.lastRef;
+            }
+          }
+        } catch (_err) {}
+        // Hidden/removed anchor: hold still until checkAlive closes us.
+        if (this.lastRef) return this.lastRef;
+      }
+      // No element anchor: follow the document (window scroll).
+      return {
+        x: -(window.scrollX || window.pageXOffset || 0),
+        y: -(window.scrollY || window.pageYOffset || 0)
+      };
+    }
+
+    rememberOffset() {
+      if (!this.pos) return;
+      const ref = this.refPoint();
+      this.offset = { x: this.pos.x - ref.x, y: this.pos.y - ref.y };
+    }
+
+    follow() {
+      if (this.destroyed || this.dragging || !this.offset) return;
+      const ref = this.refPoint();
+      const x = ref.x + this.offset.x;
+      const y = ref.y + this.offset.y;
+      if (!this.pos || Math.abs(this.pos.x - x) > 0.25 || Math.abs(this.pos.y - y) > 0.25) {
+        this.setHostPos(x, y);
+      }
+    }
+
+    handleResize() {
+      if (this.destroyed) return;
+      if (this.userMoved) {
+        this.follow();
+        return;
+      }
+      this.place();
+    }
+
+    checkAlive() {
+      if (this.destroyed) return;
+      if (currentRouteKey() !== this.routeKey) {
+        this.destroy();
+        return;
+      }
+      const el = this.anchorEl;
+      if (!el) return;
+      let gone = false;
+      try {
+        if (!el.isConnected) {
+          gone = true;
+        } else if (this.img) {
+          const r = el.getBoundingClientRect();
+          if (r.width < 2 || r.height < 2) {
+            gone = true;
+          } else {
+            const cs = getComputedStyle(el);
+            if (cs.display === 'none' || cs.visibility === 'hidden') gone = true;
+          }
+        }
+      } catch (_err) {
+        gone = true;
+      }
+      if (gone) {
+        this.missingTicks += 1;
+        if (this.missingTicks >= 2) this.destroy();
+      } else {
+        this.missingTicks = 0;
+      }
+    }
+
+    place() {
       if (this.destroyed) return;
       if (this.img && !isElementCurrent(this.img)) {
         this.destroy();
         return;
       }
-      this.applySize();
-      if (this.userMoved) {
-        const rect = this.host.getBoundingClientRect();
-        this.placeAt(rect.left, rect.top);
+      const preferW = this.applySize();
+      if (this.userMoved && this.offset) {
+        this.follow();
         return;
       }
       const margin = 8;
       const vw = window.innerWidth || document.documentElement.clientWidth || 320;
       const vh = window.innerHeight || document.documentElement.clientHeight || 240;
-
       const anchor = this.getAnchor() || {};
-      const rect = this.host.getBoundingClientRect();
-      const w = rect.width || this.host.offsetWidth || 240;
-      const h = rect.height || this.host.offsetHeight || 80;
-      const pos = CITLayout.pickPanelPosition({
-        sourceRect: anchor.sourceRect,
-        mouse: anchor.mouse,
-        panelW: w,
-        panelH: h,
-        vw,
-        vh,
-        margin,
-        prefer: anchor.prefer
-      });
-      this.host.style.left = `${pos.x}px`;
-      this.host.style.top = `${pos.y}px`;
+      let x;
+      let y;
+      if (this.phase === 'result' && anchor.imageRect && anchor.columnRect) {
+        const res = CITLayout.pickImagePanelPlacement({
+          vw,
+          vh,
+          margin,
+          imageRect: anchor.imageRect,
+          columnRect: anchor.columnRect,
+          textRects: anchor.textRects,
+          preferW,
+          minW: Math.min(260, preferW),
+          measure: (w) => {
+            this.host.style.width = `${w}px`;
+            return this.host.getBoundingClientRect().height || this.host.offsetHeight || 80;
+          }
+        });
+        this.host.style.width = `${res.width}px`;
+        x = res.x;
+        y = res.y;
+      } else {
+        const rect = this.host.getBoundingClientRect();
+        const w = rect.width || this.host.offsetWidth || 240;
+        const h = rect.height || this.host.offsetHeight || 80;
+        const pos = CITLayout.pickPanelPosition({
+          sourceRect: anchor.sourceRect,
+          mouse: anchor.mouse,
+          panelW: w,
+          panelH: h,
+          vw,
+          vh,
+          margin,
+          prefer: anchor.prefer
+        });
+        x = pos.x;
+        y = pos.y;
+      }
+      this.setHostPos(x, y);
+      this.rememberOffset();
     }
 
     destroy() {
       if (this.destroyed) return;
       this.destroyed = true;
       clearTimeout(this.errorTimer);
-      window.removeEventListener('resize', this.onSync, true);
-      document.removeEventListener('scroll', this.onSync, true);
+      clearInterval(this.aliveTimer);
+      if (this.rafId) cancelAnimationFrame(this.rafId);
+      window.removeEventListener('resize', this.onResize, true);
+      document.removeEventListener('scroll', this.onScroll, true);
       if (window.visualViewport) {
-        window.visualViewport.removeEventListener('resize', this.onSync);
-        window.visualViewport.removeEventListener('scroll', this.onSync);
+        window.visualViewport.removeEventListener('resize', this.onResize);
+        window.visualViewport.removeEventListener('scroll', this.onScroll);
       }
       this.host.remove();
       activeOverlays.delete(this);

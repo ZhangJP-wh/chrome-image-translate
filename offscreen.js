@@ -103,10 +103,14 @@ function pushUnit(units, text, bbox, confidence, invScale) {
   const x1 = bbox.x1 * invScale;
   const y1 = bbox.y1 * invScale;
   if ((x1 - x0) < 2 || (y1 - y0) < 2) return;
-  units.push({
+  const unit = {
     text: cleaned,
     bbox: { x0, y0, x1, y1 }
-  });
+  };
+  if (confidence != null && Number.isFinite(Number(confidence))) {
+    unit.confidence = Math.round(Number(confidence));
+  }
+  units.push(unit);
 }
 
 function groupWordsIntoLines(words) {
