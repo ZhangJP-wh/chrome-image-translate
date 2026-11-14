@@ -16,7 +16,7 @@ function setupMenus() {
     chrome.contextMenus.create({
       id: MENU_ID,
       title: '翻译',
-      contexts: ['image']
+      contexts: ['image', 'selection']
     });
   });
 }
@@ -185,7 +185,73 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   handleTranslateClick(info, tab);
 });
 
+function isImageClick(info) {
+  return info.mediaType === 'image' || !!info.srcUrl;
+}
+
+function splitSelectionText(text) {
+  if (text.includes('\n')) return text.split('\n');
+  return [text];
+}
+
 async function handleTranslateClick(info, tab) {
+  if (isImageClick(info)) {
+    return handleImageTranslate(info, tab);
+  }
+  return handleSelectionTranslate(info, tab);
+}
+
+async function handleSelectionTranslate(info, tab) {
+  const tabId = tab.id;
+  const frameId = info.frameId ?? 0;
+  const requestId = `tr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  const reportError = async (error) => {
+    try {
+      await sendToFrame(tabId, frameId, {
+        type: 'CIT_ERROR',
+        requestId,
+        error
+      });
+    } catch (_err) {
+      console.warn('图片翻译：无法在页面上显示错误', error);
+    }
+  };
+
+  try {
+    await ensureContentScript(tabId, frameId);
+    const prepared = await sendToFrame(tabId, frameId, {
+      type: 'CIT_PREPARE_SELECTION',
+      requestId,
+      fallbackText: info.selectionText || ''
+    });
+
+    if (!prepared || !prepared.ok) {
+      throw new Error((prepared && prepared.error) || '没有可翻译的文字');
+    }
+
+    const source = String(prepared.text || '');
+    if (!source.trim()) {
+      throw new Error('没有可翻译的文字');
+    }
+
+    const parts = splitSelectionText(source);
+    const translatedParts = await translateLines(parts);
+    const translated = translatedParts.join('\n');
+
+    await sendToFrame(tabId, frameId, {
+      type: 'CIT_SELECTION_RESULT',
+      requestId,
+      source,
+      text: translated
+    });
+  } catch (err) {
+    console.error('文字翻译失败', err);
+    await reportError(friendlyError(err, '翻译失败，请稍后重试'));
+  }
+}
+
+async function handleImageTranslate(info, tab) {
   const tabId = tab.id;
   const frameId = info.frameId ?? 0;
   const requestId = `tr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
