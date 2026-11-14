@@ -5,7 +5,7 @@ Chrome / Edge 扩展：在网页**图片**或**选中的文字**上右键「翻�
 Chrome / Edge extension: right-click an **image** or **selected text** → **翻译** → **谷歌翻译** or **必应翻译**. Simplified Chinese is overlaid in place when possible; otherwise a popup appears on the same page. No new tab is opened.
 
 **仓库 / Repo:** https://github.com/ZhangJP-wh/chrome-image-translate  
-**版本 / Version:** **0.1.6**（见 `manifest.json`）
+**版本 / Version:** **0.1.7**（见 `manifest.json`）
 
 ### 一句话场景 / What it’s for
 
@@ -116,7 +116,7 @@ See also [`AGENT_INSTALL.md`](./AGENT_INSTALL.md).
 | 全程留在当前页，不打开新标签 | Stays on the current page; no new tab |
 | 「必应翻译」排在「谷歌翻译」下面，面向中国大陆等谷歌可能无法访问的网络，无需申请密钥 | **必应翻译** sits below **谷歌翻译** for networks where Google is unreachable (e.g. mainland China); no API key to apply for |
 | 图片识别（OCR）在本地完成，不依赖 CDN；选中文字不经过 OCR | Image OCR runs locally with no CDN; selected text skips OCR |
-| 点工具栏图标可勾选显示「谷歌翻译」「必应翻译」或两项都显示。只开一项时出现在右键一级菜单；两项都开时收成「翻译」子菜单，并多一行提示可在设置里只勾选一项 | In the toolbar popup, choose Google, Bing, or both. One engine appears as a top-level item; both are grouped under a **翻译** submenu, which includes a hint that enabling only one engine removes the submenu |
+| 点工具栏图标可勾选显示「谷歌翻译」「必应翻译」或两项都显示。只开一项时出现在右键一级菜单；两项都开时收成「翻译」子菜单，并多一行提示可在设置里只勾选一项；点击该行会打开设置页并定位到勾选项 | In the toolbar popup, choose Google, Bing, or both. One engine appears as a top-level item; both are grouped under a **翻译** submenu, whose hint row opens the settings page and focuses the engine checkboxes |
 | 菜单前的图标使用谷歌翻译产品图标（Chrome 会把扩展图标显示在右键菜单旁） | Menu uses the Google Translate product icon (Chrome shows the extension icon beside the item) |
 | 自带虚构英文示例图 `demo/test-en-text.png`，方便试用图片翻译 | Ships a fictional English demo image `demo/test-en-text.png` for trying image translation |
 
@@ -211,10 +211,15 @@ Do not use real browsing history, private URLs, or real account data in README/r
 
 ## 变更 / Changelog
 
+### v0.1.7
+
+- 点击二级菜单里的提示行，会打开扩展设置页并高亮「右键菜单里显示」的勾选项  
+  Clicking the submenu hint opens the extension settings page and highlights the engine checkboxes
+
 ### v0.1.6
 
-- 两项都开、出现「翻译」二级菜单时，第三行会提示：可在扩展设置里只勾选一项来去掉二级菜单；点击该行会打开设置弹出页  
-  When both engines are on and the **翻译** submenu appears, a third row explains that enabling only one engine in settings removes the submenu. Clicking the row opens the toolbar popup
+- 两项都开、出现「翻译」二级菜单时，第三行会提示：可在扩展设置里只勾选一项来去掉二级菜单；点击该行会打开设置页并定位到勾选项  
+  When both engines are on and the **翻译** submenu appears, a third row explains that enabling only one engine in settings removes the submenu. Clicking the row opens the settings page and focuses those checkboxes
 
 ### v0.1.5
 

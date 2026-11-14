@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "图片翻译",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "在网页图片或选中的文字上右键「翻译」，可选谷歌翻译或必应翻译，以简体中文覆盖在原文对应位置（无法覆盖时改为页面内弹窗）。",
   "permissions": [
     "contextMenus",
@@ -50,5 +50,9 @@
   ],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
   }
 }

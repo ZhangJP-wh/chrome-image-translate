@@ -434,19 +434,30 @@ async function sendToFrame(tabId, frameId, message) {
   return chrome.tabs.sendMessage(tabId, message, { frameId });
 }
 
-async function openSettingsPopup() {
+async function openSettingsFromHint() {
   try {
-    if (chrome.action && chrome.action.openPopup) {
-      await chrome.action.openPopup();
+    if (chrome.storage.session) {
+      await chrome.storage.session.set({ focusEngines: true });
+    } else {
+      await chrome.storage.local.set({ focusEngines: true });
     }
   } catch (_err) {
-    // Popup can only open from a user gesture in recent Chrome; ignore if unavailable.
+    // Highlight is optional; still open the settings page.
   }
+  try {
+    if (chrome.runtime.openOptionsPage) {
+      await chrome.runtime.openOptionsPage();
+      return;
+    }
+  } catch (_err) {
+    // Fall through to a settings tab.
+  }
+  await chrome.tabs.create({ url: chrome.runtime.getURL('options.html#engines') });
 }
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === MENU_HINT_ID) {
-    openSettingsPopup();
+    openSettingsFromHint();
     return;
   }
   if (info.menuItemId !== MENU_GOOGLE_ID && info.menuItemId !== MENU_BING_ID) return;

@@ -54,4 +54,43 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   googleBox.addEventListener('change', onChange);
   bingBox.addEventListener('change', onChange);
+  await maybeFocusSettings();
 });
+
+async function takeFocusFlag() {
+  const areas = [];
+  if (chrome.storage.session) areas.push(chrome.storage.session);
+  areas.push(chrome.storage.local);
+  for (const area of areas) {
+    try {
+      const data = await area.get('focusEngines');
+      if (data && data.focusEngines) {
+        await area.set({ focusEngines: false });
+        return true;
+      }
+    } catch (_err) {
+      // Try the next storage area.
+    }
+  }
+  return location.hash === '#engines';
+}
+
+async function maybeFocusSettings() {
+  const section = document.getElementById('engine-settings');
+  if (!section) return;
+  const shouldFocus = await takeFocusFlag();
+  if (!shouldFocus) return;
+  section.classList.add('focus-target');
+  section.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  const first = document.getElementById('engine-google');
+  if (first) first.focus();
+  setTimeout(() => section.classList.remove('focus-target'), 2400);
+}
+
+if (chrome.storage && chrome.storage.onChanged) {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if ((area === 'session' || area === 'local') && changes.focusEngines && changes.focusEngines.newValue) {
+      maybeFocusSettings();
+    }
+  });
+}
