@@ -33,6 +33,6 @@ If a user pastes https://github.com/ZhangJP-wh/chrome-image-translate and asks y
 
 ## Optional smoke test / 可选冒烟
 
-1. Open `demo/test-en-text.png` in a normal webpage (or drag the file into a tab), right-click the image → **翻译** → **谷歌翻译** or **必应翻译**. Simplified Chinese should overlay the English sentence on the image. Use **显示原文 / 显示译文** and **关闭**.
-2. On any ordinary webpage, select a short English paragraph (including one with a blank line between paragraphs) → right-click → **翻译** → either engine. The translation should overlay the original text, or appear as an on-page popup if an overlay is not possible. No new tab should open.
+1. Open `demo/test-en-text.png` in a normal webpage (or drag the file into a tab), right-click the image → **翻译** → **谷歌翻译** or **必应翻译**. A draggable floating window should show the Simplified Chinese translation. Use **关闭** to dismiss it. Selecting Simplified Chinese text should translate it into English in the same kind of window.
+2. On any ordinary webpage, select a short English paragraph (including one with a blank line between paragraphs) → right-click → **翻译** → either engine. A draggable floating window should show the Simplified Chinese translation, without covering the original and without opening a new tab. Selecting a Simplified Chinese sentence should translate it into English in the same window.
 3. If Google Translate is unreachable (common on networks in mainland China), 「必应翻译」 should still work.

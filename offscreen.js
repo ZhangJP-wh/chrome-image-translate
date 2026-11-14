@@ -6,7 +6,7 @@ let workerPromise = null;
 function getWorker() {
   if (!workerPromise) {
     workerPromise = (async () => {
-      const worker = await Tesseract.createWorker('eng', 1, {
+      const worker = await Tesseract.createWorker('eng+chi_sim', 1, {
         workerPath: chrome.runtime.getURL('lib/worker.min.js'),
         corePath: chrome.runtime.getURL('lib'),
         langPath: chrome.runtime.getURL('tessdata'),

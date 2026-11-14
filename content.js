@@ -43,9 +43,7 @@ function boot() {
     }
     if (message.type === 'CIT_SELECTION_RESULT') {
       const overlay = findOverlayByRequest(message.requestId);
-      if (overlay && overlay.showSelectionResult) {
-        overlay.showSelectionResult(message.source || '', message.text || '');
-      }
+      if (overlay) overlay.showResult(message.text || '');
       return undefined;
     }
     if (message.type === 'CIT_FETCH_FROM_PAGE') {
@@ -58,7 +56,11 @@ function boot() {
     }
     if (message.type === 'CIT_RESULT') {
       const overlay = findOverlayByRequest(message.requestId);
-      if (overlay) overlay.showBoxes(message.boxes || [], message.imageWidth, message.imageHeight);
+      if (overlay) {
+        const joined = (message.text != null && String(message.text))
+          || (message.boxes || []).map((item) => (item && item.text) ? String(item.text) : '').join('\n');
+        overlay.showResult(joined);
+      }
       return undefined;
     }
     if (message.type === 'CIT_ERROR') {
@@ -172,7 +174,7 @@ function boot() {
 
     let overlay = overlays.get(img);
     if (overlay) overlay.destroy();
-    overlay = new Overlay(img, message.requestId);
+    overlay = new FloatPanel(message.requestId, () => anchorFromImage(img), { img });
     overlays.set(img, overlay);
     activeOverlays.add(overlay);
     overlay.showLoading();
@@ -359,400 +361,68 @@ function boot() {
     };
   }
 
-  const OVERLAY_CSS = `
+
+  const SNAPSHOT_MAX_AGE_MS = 60000;
+  const FLOAT_CSS = `
     :host { all: initial; }
-    .wrap {
-      position: relative;
+    .popup {
+      box-sizing: border-box;
+      pointer-events: auto;
+      background: #fff;
+      color: #202124;
+      border-radius: 8px;
+      padding: 0;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
+      border: 1px solid rgba(32, 33, 36, 0.12);
       width: 100%;
-      height: 100%;
-      overflow: hidden;
-      pointer-events: none;
       font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Heiti SC", sans-serif;
     }
-    .status {
-      position: absolute;
-      inset: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: rgba(32, 33, 36, 0.32);
-      z-index: 1;
-    }
-    .card {
-      pointer-events: auto;
+    .popup.is-error,
+    .popup.is-loading {
       background: rgba(32, 33, 36, 0.94);
       color: #fff;
-      border-radius: 8px;
-      padding: 10px 16px;
-      font-size: 14px;
-      line-height: 1.4;
-      max-width: calc(100% - 24px);
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
-      display: flex;
-      align-items: center;
-      gap: 8px;
+      border-color: transparent;
     }
-    .spinner {
-      width: 14px;
-      height: 14px;
-      border: 2px solid rgba(255,255,255,0.35);
-      border-top-color: #fff;
-      border-radius: 50%;
-      animation: cit-spin 0.8s linear infinite;
-      flex: 0 0 auto;
-    }
-    @keyframes cit-spin { to { transform: rotate(360deg); } }
-    .box {
-      position: absolute;
-      box-sizing: border-box;
-      background: rgba(255, 255, 255, 0.92);
-      border-radius: 2px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      overflow: hidden;
-      padding: 1px 3px;
-    }
-    .box .text {
-      color: #202124;
-      text-align: center;
-      width: 100%;
-      overflow-wrap: anywhere;
-      word-break: break-word;
-      line-height: 1.25;
-      font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Heiti SC", sans-serif;
-    }
-    .wrap.is-original .box { visibility: hidden; }
     .toolbar {
-      position: absolute;
-      top: 8px;
-      right: 8px;
       display: flex;
+      align-items: center;
+      justify-content: flex-end;
       gap: 6px;
-      pointer-events: auto;
-      z-index: 2;
-      filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.28));
+      padding: 8px 10px 0;
+      cursor: move;
+      user-select: none;
     }
     .toolbar button {
       appearance: none;
       border: 0;
       margin: 0;
       cursor: pointer;
-      background: #fff;
+      background: #f1f3f4;
       color: #202124;
       font-size: 12px;
       line-height: 1;
       padding: 6px 8px;
       border-radius: 4px;
-      font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Heiti SC", sans-serif;
+      font-family: inherit;
     }
-    .toolbar button:hover { background: #f1f3f4; }
-    .hidden { display: none !important; }
-  `;
-
-  class Overlay {
-    constructor(img, requestId) {
-      this.img = img;
-      this.requestId = requestId;
-      this.boxes = [];
-      this.coordWidth = img.naturalWidth || 0;
-      this.coordHeight = img.naturalHeight || 0;
-      this.showingOriginal = false;
-      this.destroyed = false;
-      this.errorTimer = 0;
-
-      this.host = document.createElement('div');
-      this.host.setAttribute('data-cit-overlay', '1');
-      this.host.style.cssText = [
-        'all: initial',
-        'display: block',
-        'position: fixed',
-        'left: 0',
-        'top: 0',
-        'width: 0',
-        'height: 0',
-        'overflow: hidden',
-        'z-index: 2147483646',
-        'pointer-events: none',
-        'margin: 0',
-        'padding: 0',
-        'border: 0',
-        'box-sizing: border-box'
-      ].join(';');
-
-      this.shadow = this.host.attachShadow({ mode: 'open' });
-      const style = document.createElement('style');
-      style.textContent = OVERLAY_CSS;
-      this.wrap = document.createElement('div');
-      this.wrap.className = 'wrap';
-      this.shadow.append(style, this.wrap);
-      (document.documentElement || document.body).appendChild(this.host);
-
-      this.onSync = () => this.syncPosition();
-      this.resizeObserver = new ResizeObserver(this.onSync);
-      this.resizeObserver.observe(img);
-      window.addEventListener('resize', this.onSync, true);
-      document.addEventListener('scroll', this.onSync, true);
-      if (window.visualViewport) {
-        window.visualViewport.addEventListener('resize', this.onSync);
-        window.visualViewport.addEventListener('scroll', this.onSync);
-      }
-      this.syncPosition();
-    }
-
-    syncPosition() {
-      if (this.destroyed) return;
-      if (!isElementCurrent(this.img)) {
-        this.destroy();
-        return;
-      }
-      const map = getImageMapping(this.img);
-      this.mapping = map;
-      this.host.style.left = `${map.cssLeft}px`;
-      this.host.style.top = `${map.cssTop}px`;
-      this.host.style.width = `${map.cssWidth}px`;
-      this.host.style.height = `${map.cssHeight}px`;
-      this.layoutBoxes();
-    }
-
-    clearStage() {
-      this.wrap.replaceChildren();
-      this.wrap.classList.remove('is-original');
-    }
-
-    showLoading() {
-      this.clearStage();
-      const status = document.createElement('div');
-      status.className = 'status';
-      status.innerHTML = '<div class="card"><span class="spinner"></span><span>翻译中…</span></div>';
-      this.wrap.appendChild(status);
-      this.syncPosition();
-    }
-
-    showError(message) {
-      this.clearStage();
-      const status = document.createElement('div');
-      status.className = 'status';
-      const card = document.createElement('div');
-      card.className = 'card';
-      card.textContent = message || '翻译失败，请稍后重试';
-      status.appendChild(card);
-      this.addToolbar(true);
-      this.wrap.appendChild(status);
-      this.syncPosition();
-      clearTimeout(this.errorTimer);
-      this.errorTimer = setTimeout(() => {
-        if (!this.destroyed) this.destroy();
-      }, 4000);
-    }
-
-    showBoxes(boxes, imageWidth, imageHeight) {
-      this.boxes = Array.isArray(boxes) ? boxes : [];
-      if (imageWidth) this.coordWidth = imageWidth;
-      if (imageHeight) this.coordHeight = imageHeight;
-      this.showingOriginal = false;
-      this.clearStage();
-      this.boxLayer = document.createElement('div');
-      this.wrap.appendChild(this.boxLayer);
-      this.addToolbar(false);
-      this.syncPosition();
-    }
-
-    addToolbar(errorMode) {
-      const toolbar = document.createElement('div');
-      toolbar.className = 'toolbar';
-      if (!errorMode) {
-        const toggle = document.createElement('button');
-        toggle.type = 'button';
-        toggle.textContent = '显示原文';
-        toggle.addEventListener('click', (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          this.showingOriginal = !this.showingOriginal;
-          this.wrap.classList.toggle('is-original', this.showingOriginal);
-          toggle.textContent = this.showingOriginal ? '显示译文' : '显示原文';
-        });
-        toolbar.appendChild(toggle);
-      }
-      const close = document.createElement('button');
-      close.type = 'button';
-      close.textContent = '关闭';
-      close.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        this.destroy();
-      });
-      toolbar.appendChild(close);
-      this.wrap.appendChild(toolbar);
-    }
-
-    layoutBoxes() {
-      if (!this.boxLayer || !this.mapping) return;
-      this.boxLayer.replaceChildren();
-      const map = this.mapping;
-      const coordW = this.coordWidth || map.nw;
-      const coordH = this.coordHeight || map.nh;
-      const scaleAdjustX = coordW ? map.nw / coordW : 1;
-      const scaleAdjustY = coordH ? map.nh / coordH : 1;
-
-      for (const item of this.boxes) {
-        const bbox = item.bbox;
-        if (!bbox) continue;
-        const x0 = bbox.x0 * scaleAdjustX;
-        const y0 = bbox.y0 * scaleAdjustY;
-        const x1 = bbox.x1 * scaleAdjustX;
-        const y1 = bbox.y1 * scaleAdjustY;
-        const left = (x0 - map.originX) * map.scaleX;
-        const top = (y0 - map.originY) * map.scaleY;
-        const width = Math.max(2, (x1 - x0) * map.scaleX);
-        const height = Math.max(2, (y1 - y0) * map.scaleY);
-        const el = document.createElement('div');
-        el.className = 'box';
-        el.style.left = `${left}px`;
-        el.style.top = `${top}px`;
-        el.style.width = `${width}px`;
-        el.style.height = `${height}px`;
-        const text = document.createElement('div');
-        text.className = 'text';
-        text.textContent = item.text || '';
-        el.appendChild(text);
-        this.boxLayer.appendChild(el);
-        fitText(text, width, height);
-      }
-    }
-
-    destroy() {
-      if (this.destroyed) return;
-      this.destroyed = true;
-      clearTimeout(this.errorTimer);
-      this.resizeObserver.disconnect();
-      window.removeEventListener('resize', this.onSync, true);
-      document.removeEventListener('scroll', this.onSync, true);
-      if (window.visualViewport) {
-        window.visualViewport.removeEventListener('resize', this.onSync);
-        window.visualViewport.removeEventListener('scroll', this.onSync);
-      }
-      this.host.remove();
-      activeOverlays.delete(this);
-      if (overlays.get(this.img) === this) overlays.delete(this.img);
-    }
-  }
-
-  function fitText(textEl, boxW, boxH) {
-    const maxH = Math.max(8, boxH - 2);
-    const maxW = Math.max(8, boxW - 4);
-    let lo = 6;
-    let hi = Math.min(64, Math.floor(maxH));
-    let best = 6;
-    while (lo <= hi) {
-      const mid = Math.floor((lo + hi) / 2);
-      textEl.style.fontSize = `${mid}px`;
-      if (textEl.scrollWidth <= maxW + 0.5 && textEl.scrollHeight <= maxH + 0.5) {
-        best = mid;
-        lo = mid + 1;
-      } else {
-        hi = mid - 1;
-      }
-    }
-    textEl.style.fontSize = `${best}px`;
-  }
-
-  const SNAPSHOT_MAX_AGE_MS = 60000;
-  const TOOLBAR_H = 32;
-  const SELECTION_CSS = `
-    :host { all: initial; }
-    .wrap {
-      position: relative;
-      width: 100%;
-      height: 100%;
-      pointer-events: none;
-      font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Heiti SC", sans-serif;
-    }
-    .status {
-      position: absolute;
-      inset: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 1;
-    }
-    .card {
-      pointer-events: auto;
-      background: rgba(32, 33, 36, 0.94);
-      color: #fff;
-      border-radius: 8px;
-      padding: 10px 16px;
-      font-size: 14px;
-      line-height: 1.4;
-      max-width: calc(100% - 16px);
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .spinner {
-      width: 14px;
-      height: 14px;
-      border: 2px solid rgba(255,255,255,0.35);
-      border-top-color: #fff;
-      border-radius: 50%;
-      animation: cit-spin 0.8s linear infinite;
-      flex: 0 0 auto;
-    }
-    @keyframes cit-spin { to { transform: rotate(360deg); } }
-    .region {
-      position: absolute;
-      box-sizing: border-box;
-      background: rgba(255, 255, 255, 0.94);
-      border-radius: 2px;
-      display: flex;
-      align-items: center;
-      justify-content: flex-start;
-      overflow: hidden;
-      padding: 1px 4px;
-      pointer-events: auto;
-    }
-    .region .text {
-      color: #202124;
-      text-align: left;
-      width: 100%;
-      overflow-wrap: anywhere;
-      word-break: break-word;
-      line-height: 1.25;
-      font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Heiti SC", sans-serif;
-    }
-    .wrap.is-original .region { visibility: hidden; }
-    .popup {
-      position: absolute;
-      left: 0;
-      top: 0;
-      width: 100%;
-      box-sizing: border-box;
-      pointer-events: auto;
+    .toolbar button:hover { background: #e8eaed; }
+    .popup.is-error .toolbar button,
+    .popup.is-loading .toolbar button {
       background: #fff;
       color: #202124;
-      border-radius: 8px;
-      padding: 12px 14px 12px;
-      box-shadow: 0 4px 18px rgba(0, 0, 0, 0.28);
-      max-width: 100%;
     }
-    .popup .body {
+    .body {
       font-size: 14px;
       line-height: 1.55;
       overflow-wrap: anywhere;
       word-break: break-word;
       max-height: min(50vh, 360px);
       overflow: auto;
-      color: #202124;
-    }
-    .popup.is-error .body,
-    .popup.is-loading .body {
-      color: #fff;
-    }
-    .popup.is-error,
-    .popup.is-loading {
-      background: rgba(32, 33, 36, 0.94);
-      color: #fff;
+      padding: 10px 14px 14px;
+      color: inherit;
+      user-select: text;
+      cursor: text;
+      white-space: pre-wrap;
     }
     .popup.is-loading .body {
       display: flex;
@@ -760,45 +430,19 @@ function boot() {
       gap: 8px;
       max-height: none;
       overflow: visible;
+      cursor: default;
+      user-select: none;
     }
-    .toolbar {
-      position: absolute;
-      top: 0;
-      right: 0;
-      display: flex;
-      gap: 6px;
-      pointer-events: auto;
-      z-index: 2;
-      filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.28));
+    .spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255,255,255,0.35);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: cit-spin 0.8s linear infinite;
+      flex: 0 0 auto;
     }
-    .toolbar.toolbar-in-popup {
-      position: relative;
-      top: auto;
-      right: auto;
-      justify-content: flex-end;
-      margin: 0 0 8px;
-      filter: none;
-    }
-    .toolbar button {
-      appearance: none;
-      border: 0;
-      margin: 0;
-      cursor: pointer;
-      background: #fff;
-      color: #202124;
-      font-size: 12px;
-      line-height: 1;
-      padding: 6px 8px;
-      border-radius: 4px;
-      font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Heiti SC", sans-serif;
-    }
-    .toolbar button:hover { background: #f1f3f4; }
-    .popup.is-error .toolbar button,
-    .popup.is-loading .toolbar button {
-      background: #fff;
-      color: #202124;
-    }
-    .hidden { display: none !important; }
+    @keyframes cit-spin { to { transform: rotate(360deg); } }
   `;
 
   function isFormControl(el) {
@@ -1024,21 +668,31 @@ function boot() {
     return String(fallbackText || '');
   }
 
-  function choosePlacement(snapshot) {
-    const fallbackAnchor = (snapshot && snapshot.mouse)
-      || { x: Math.round(window.innerWidth / 2), y: 24 };
-    if (!snapshot || snapshot.inFormControl) {
-      return { mode: 'popup', anchor: fallbackAnchor };
-    }
-    const placed = getPlacementRects(snapshot);
+  function chooseAnchor(snapshot) {
+    const fallback = (snapshot && snapshot.mouse) || { x: Math.round(window.innerWidth / 2), y: 24 };
+    const placed = snapshot ? getPlacementRects(snapshot) : null;
     if (placed && placed.rects.length) {
-      return { mode: 'overlay', rects: placed.rects, live: placed.live };
+      const union = unionRect(placed.rects);
+      return { x: union.left, y: union.bottom + 8, sourceRect: union };
     }
-    if (snapshot.rects && snapshot.rects[0]) {
+    if (snapshot && snapshot.rects && snapshot.rects[0]) {
       const r = snapshot.rects[0];
-      return { mode: 'popup', anchor: { x: r.left, y: r.bottom } };
+      return { x: r.left, y: r.bottom + 8 };
     }
-    return { mode: 'popup', anchor: fallbackAnchor };
+    return fallback;
+  }
+
+  function anchorFromImage(img) {
+    if (!isElementCurrent(img)) {
+      return { x: 24, y: 24 };
+    }
+    const r = img.getBoundingClientRect();
+    const vw = window.innerWidth || 800;
+    const margin = 8;
+    if (r.right + margin + 240 <= vw) {
+      return { x: r.right + margin, y: Math.max(margin, r.top), sourceRect: r };
+    }
+    return { x: r.left, y: r.bottom + margin, sourceRect: r };
   }
 
   function handlePrepareSelection(message) {
@@ -1048,39 +702,25 @@ function boot() {
       return { ok: false, error: '没有可翻译的文字' };
     }
     if (currentSelectionView) currentSelectionView.destroy();
-    const placement = choosePlacement(snapshot);
-    const view = new SelectionView(message.requestId, snapshot, placement, text);
+    const view = new FloatPanel(message.requestId, () => chooseAnchor(snapshot));
     currentSelectionView = view;
     activeOverlays.add(view);
     view.showLoading();
-    return { ok: true, text, mode: placement.mode };
+    return { ok: true, text };
   }
 
-  class SelectionView {
-    constructor(requestId, snapshot, placement, sourceText) {
+  class FloatPanel {
+    constructor(requestId, getAnchor, options) {
       this.requestId = requestId;
-      this.snapshot = snapshot || {
-        mouse: placement.anchor || { x: 24, y: 24 },
-        scrollX: window.scrollX || 0,
-        scrollY: window.scrollY || 0,
-        rects: [],
-        range: null,
-        inFormControl: true,
-        time: Date.now()
-      };
-      this.mode = placement.mode;
-      this.anchor = placement.anchor || this.snapshot.mouse || { x: 24, y: 24 };
-      this.sourceText = sourceText || '';
-      this.translatedText = '';
-      this.showingOriginal = false;
+      this.getAnchor = typeof getAnchor === 'function' ? getAnchor : () => ({ x: 24, y: 24 });
+      this.img = options && options.img ? options.img : null;
       this.destroyed = false;
       this.errorTimer = 0;
+      this.userMoved = false;
       this.phase = 'loading';
-      this.lastError = '';
-      this._switchingToPopup = false;
 
       this.host = document.createElement('div');
-      this.host.setAttribute('data-cit-selection', '1');
+      this.host.setAttribute('data-cit-float', '1');
       this.host.style.cssText = [
         'all: initial',
         'display: block',
@@ -1088,7 +728,7 @@ function boot() {
         'left: 0',
         'top: 0',
         'width: 0',
-        'height: 0',
+        'height: auto',
         'overflow: visible',
         'z-index: 2147483647',
         'pointer-events: none',
@@ -1100,15 +740,12 @@ function boot() {
 
       this.shadow = this.host.attachShadow({ mode: 'open' });
       const style = document.createElement('style');
-      style.textContent = SELECTION_CSS;
+      style.textContent = FLOAT_CSS;
       this.wrap = document.createElement('div');
-      this.wrap.className = 'wrap';
       this.shadow.append(style, this.wrap);
       (document.documentElement || document.body).appendChild(this.host);
 
       this.onSync = () => this.syncPosition();
-      this.resizeObserver = new ResizeObserver(this.onSync);
-      this.observeRangeAncestor();
       window.addEventListener('resize', this.onSync, true);
       document.addEventListener('scroll', this.onSync, true);
       if (window.visualViewport) {
@@ -1117,104 +754,40 @@ function boot() {
       }
     }
 
-    switchToPopup(anchor) {
-      const r = this.snapshot && this.snapshot.rects && this.snapshot.rects[0];
-      this.mode = 'popup';
-      this.anchor = anchor || this.anchor || this.snapshot.mouse || (r ? { x: r.left, y: r.bottom } : { x: 24, y: 24 });
-      if (this._switchingToPopup) {
-        this.layoutPopup();
-        return;
-      }
-      this._switchingToPopup = true;
-      try {
-        if (this.phase === 'error') {
-          this.showError(this.lastError || '翻译失败，请稍后重试');
-        } else if (this.phase === 'result') {
-          this.showSelectionResult(this.sourceText, this.translatedText);
-        } else {
-          this.showLoading();
-        }
-      } finally {
-        this._switchingToPopup = false;
-      }
-    }
-
-    observeRangeAncestor() {
-      try {
-        const range = this.snapshot && this.snapshot.range;
-        if (!range) return;
-        const node = range.commonAncestorContainer;
-        const el = node && (node.nodeType === 1 ? node : node.parentElement);
-        if (el) this.resizeObserver.observe(el);
-      } catch (_err) {
-        // ignore
-      }
-    }
-
-    syncPosition() {
-      if (this.destroyed) return;
-      if (this.mode === 'overlay') {
-        const placed = getPlacementRects(this.snapshot);
-        if (!placed || !placed.rects.length) {
-          const r = this.snapshot.rects && this.snapshot.rects[0];
-          this.switchToPopup(this.snapshot.mouse || (r ? { x: r.left, y: r.bottom } : { x: 24, y: 24 }));
-          return;
-        }
-        this.layoutOverlay(placed.rects);
-        return;
-      }
-      this.layoutPopup();
-    }
-
     clearStage() {
       this.wrap.replaceChildren();
-      this.wrap.classList.remove('is-original');
-      this.region = null;
+      this.popup = null;
       this.bodyEl = null;
+      this.toolbar = null;
     }
 
     showLoading() {
       this.phase = 'loading';
+      clearTimeout(this.errorTimer);
       this.clearStage();
-      if (this.mode === 'overlay') {
-        const status = document.createElement('div');
-        status.className = 'status';
-        status.innerHTML = '<div class="card"><span class="spinner"></span><span>翻译中…</span></div>';
-        this.wrap.appendChild(status);
-      } else {
-        this.buildPopupChrome('loading');
-        const body = document.createElement('div');
-        body.className = 'body';
-        body.innerHTML = '<span class="spinner"></span><span>翻译中…</span>';
-        this.popup.appendChild(body);
-        this.bodyEl = body;
-      }
+      this.buildPopup('loading');
+      const body = document.createElement('div');
+      body.className = 'body';
+      const spinner = document.createElement('span');
+      spinner.className = 'spinner';
+      const label = document.createElement('span');
+      label.textContent = '翻译中…';
+      body.append(spinner, label);
+      this.popup.appendChild(body);
+      this.bodyEl = body;
       this.syncPosition();
     }
 
     showError(message) {
       this.phase = 'error';
-      this.lastError = message || '翻译失败，请稍后重试';
       this.clearStage();
-      const text = this.lastError;
-      if (this.mode === 'overlay') {
-        const status = document.createElement('div');
-        status.className = 'status';
-        const card = document.createElement('div');
-        card.className = 'card';
-        card.textContent = text;
-        status.appendChild(card);
-        this.addToolbar(true);
-        this.wrap.appendChild(status);
-      } else {
-        this.buildPopupChrome('error');
-        this.addToolbar(true, true);
-        const body = document.createElement('div');
-        body.className = 'body';
-        body.textContent = text;
-        this.popup.appendChild(body);
-        this.bodyEl = body;
-      }
+      this.buildPopup('error');
+      this.addToolbar();
+      const body = document.createElement('div');
+      body.className = 'body';
+      body.textContent = message || '翻译失败，请稍后重试';
+      this.popup.appendChild(body);
+      this.bodyEl = body;
       this.syncPosition();
       clearTimeout(this.errorTimer);
       this.errorTimer = setTimeout(() => {
@@ -1222,35 +795,21 @@ function boot() {
       }, 4000);
     }
 
-    showSelectionResult(source, translated) {
-      this.sourceText = source || this.sourceText || '';
-      this.translatedText = translated || '';
-      this.showingOriginal = false;
+    showResult(text) {
       this.phase = 'result';
+      clearTimeout(this.errorTimer);
       this.clearStage();
-      if (this.mode === 'overlay') {
-        this.region = document.createElement('div');
-        this.region.className = 'region';
-        const text = document.createElement('div');
-        text.className = 'text';
-        text.textContent = this.translatedText;
-        this.region.appendChild(text);
-        this.textEl = text;
-        this.wrap.appendChild(this.region);
-        this.addToolbar(false);
-      } else {
-        this.buildPopupChrome('result');
-        this.addToolbar(false, true);
-        const body = document.createElement('div');
-        body.className = 'body';
-        body.textContent = this.translatedText;
-        this.popup.appendChild(body);
-        this.bodyEl = body;
-      }
+      this.buildPopup('result');
+      this.addToolbar();
+      const body = document.createElement('div');
+      body.className = 'body';
+      body.textContent = text || '';
+      this.popup.appendChild(body);
+      this.bodyEl = body;
       this.syncPosition();
     }
 
-    buildPopupChrome(kind) {
+    buildPopup(kind) {
       this.popup = document.createElement('div');
       this.popup.className = 'popup';
       if (kind === 'error') this.popup.classList.add('is-error');
@@ -1258,26 +817,9 @@ function boot() {
       this.wrap.appendChild(this.popup);
     }
 
-    addToolbar(errorMode, inPopup) {
+    addToolbar() {
       const toolbar = document.createElement('div');
-      toolbar.className = inPopup ? 'toolbar toolbar-in-popup' : 'toolbar';
-      if (!errorMode) {
-        const toggle = document.createElement('button');
-        toggle.type = 'button';
-        toggle.textContent = '显示原文';
-        toggle.addEventListener('click', (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          this.showingOriginal = !this.showingOriginal;
-          if (this.mode === 'overlay' && this.phase === 'result') {
-            this.wrap.classList.toggle('is-original', this.showingOriginal);
-          } else if (this.bodyEl) {
-            this.bodyEl.textContent = this.showingOriginal ? this.sourceText : this.translatedText;
-          }
-          toggle.textContent = this.showingOriginal ? '显示译文' : '显示原文';
-        });
-        toolbar.appendChild(toggle);
-      }
+      toolbar.className = 'toolbar';
       const close = document.createElement('button');
       close.type = 'button';
       close.textContent = '关闭';
@@ -1287,122 +829,55 @@ function boot() {
         this.destroy();
       });
       toolbar.appendChild(close);
-      if (inPopup && this.popup) this.popup.prepend(toolbar);
-      else this.wrap.appendChild(toolbar);
+      if (this.popup) this.popup.prepend(toolbar);
       this.toolbar = toolbar;
+      this.bindDrag(toolbar);
     }
 
-    layoutOverlay(rects) {
-      const union = unionRect(rects);
-      if (!union.width || !union.height) {
-        this.switchToPopup(this.anchor || (this.snapshot && this.snapshot.mouse));
-        return;
-      }
-      const pad = 2;
-      let boxLeft = union.left - pad;
-      let boxTop = union.top - pad;
-      let boxW = Math.max(8, union.width + pad * 2);
-      let boxH = Math.max(8, union.height + pad * 2);
-      const vw = window.innerWidth || document.documentElement.clientWidth || boxW;
-      const vh = window.innerHeight || document.documentElement.clientHeight || boxH;
-      const canAbove = boxTop >= TOOLBAR_H + 4;
-      const canBelow = boxTop + boxH + TOOLBAR_H + 4 <= vh;
-      let hostLeft = boxLeft;
-      let hostTop;
-      let hostW = boxW;
-      let hostH;
-      let toolbarPos = 'above';
-      if (canAbove) {
-        hostTop = boxTop - TOOLBAR_H;
-        hostH = boxH + TOOLBAR_H;
-        toolbarPos = 'above';
-      } else if (canBelow) {
-        hostTop = boxTop;
-        hostH = boxH + TOOLBAR_H;
-        toolbarPos = 'below';
-      } else {
-        hostTop = boxTop;
-        hostH = boxH;
-        toolbarPos = 'inside';
-      }
-
-      // Keep the host on-screen horizontally if possible, but do not shrink the text box.
-      if (hostLeft + hostW > vw - 4 && hostW < vw) {
-        hostLeft = Math.max(4, vw - 4 - hostW);
-      }
-      if (hostLeft < 4 && boxLeft >= 0) hostLeft = Math.max(0, boxLeft);
-
-      this.host.style.left = `${hostLeft}px`;
-      this.host.style.top = `${hostTop}px`;
-      this.host.style.width = `${hostW}px`;
-      this.host.style.height = `${hostH}px`;
-      this.host.style.overflow = 'visible';
-
-      if (this.toolbar && this.mode === 'overlay') {
-        this.toolbar.style.left = 'auto';
-        this.toolbar.style.right = '0px';
-        if (toolbarPos === 'above') {
-          this.toolbar.style.top = '0px';
-        } else if (toolbarPos === 'below') {
-          this.toolbar.style.top = `${boxH + 4}px`;
-        } else {
-          this.toolbar.style.top = '0px';
-        }
-      }
-
-      if (this.phase === 'loading' || this.phase === 'error') {
-        const status = this.wrap.querySelector('.status');
-        if (status) {
-          const minW = 160;
-          const minH = 44;
-          if (hostW < minW || hostH < minH) {
-            const extraW = Math.max(0, minW - hostW);
-            const extraH = Math.max(0, minH - hostH);
-            hostLeft = Math.max(4, hostLeft - extraW / 2);
-            hostW += extraW;
-            hostH += extraH;
-            if (hostLeft + hostW > vw - 4) hostLeft = Math.max(4, vw - 4 - hostW);
-            this.host.style.left = `${hostLeft}px`;
-            this.host.style.width = `${hostW}px`;
-            this.host.style.height = `${hostH}px`;
-          }
-        }
-        return;
-      }
-
-      if (this.region && this.textEl && this.phase === 'result') {
-        const relLeft = boxLeft - hostLeft;
-        const relTop = boxTop - hostTop;
-        this.region.style.left = `${relLeft}px`;
-        this.region.style.top = `${relTop}px`;
-        this.region.style.width = `${boxW}px`;
-        this.region.style.height = `${boxH}px`;
-        this.region.style.alignItems = boxH <= 40 ? 'center' : 'flex-start';
-        fitText(this.textEl, boxW, boxH);
-        const computed = parseFloat(this.textEl.style.fontSize) || 0;
-        if (computed < 12 && this.translatedText) {
-          const neededH = Math.min(Math.max(boxH, 48), Math.max(boxH, Math.min(vh * 0.5, 280)));
-          if (neededH > boxH) {
-            const grownH = neededH;
-            if (toolbarPos === 'below') hostH = grownH + TOOLBAR_H;
-            else if (toolbarPos === 'above') hostH = grownH + TOOLBAR_H;
-            else hostH = grownH;
-            const overflow = hostTop + hostH - (vh - 4);
-            if (overflow > 0) hostTop = Math.max(4, hostTop - overflow);
-            this.host.style.top = `${hostTop}px`;
-            this.host.style.height = `${hostH}px`;
-            this.region.style.top = `${boxTop - hostTop}px`;
-            this.region.style.height = `${grownH}px`;
-            if (this.toolbar && toolbarPos === 'below') {
-              this.toolbar.style.top = `${grownH + 4}px`;
-            }
-            fitText(this.textEl, boxW, grownH);
-          }
-        }
-      }
+    bindDrag(handle) {
+      handle.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0) return;
+        if (event.target && event.target.closest && event.target.closest('button')) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const rect = this.host.getBoundingClientRect();
+        const dx = event.clientX - rect.left;
+        const dy = event.clientY - rect.top;
+        this.userMoved = true;
+        const onMove = (ev) => {
+          if (this.destroyed) return;
+          this.placeAt(ev.clientX - dx, ev.clientY - dy);
+        };
+        const onUp = () => {
+          window.removeEventListener('pointermove', onMove, true);
+          window.removeEventListener('pointerup', onUp, true);
+          window.removeEventListener('pointercancel', onUp, true);
+        };
+        window.addEventListener('pointermove', onMove, true);
+        window.addEventListener('pointerup', onUp, true);
+        window.addEventListener('pointercancel', onUp, true);
+      });
     }
 
-    layoutPopup() {
+    placeAt(left, top) {
+      const margin = 8;
+      const vw = window.innerWidth || document.documentElement.clientWidth || 320;
+      const vh = window.innerHeight || document.documentElement.clientHeight || 240;
+      const w = this.host.offsetWidth || 0;
+      const h = this.host.offsetHeight || 0;
+      left = Math.min(Math.max(margin, left), Math.max(margin, vw - w - margin));
+      top = Math.min(Math.max(margin, top), Math.max(margin, vh - h - margin));
+      this.host.style.left = `${left}px`;
+      this.host.style.top = `${top}px`;
+    }
+
+    syncPosition() {
+      if (this.destroyed) return;
+      if (this.img && !isElementCurrent(this.img)) {
+        this.destroy();
+        return;
+      }
+      if (this.userMoved) return;
       const margin = 8;
       const vw = window.innerWidth || document.documentElement.clientWidth || 320;
       const vh = window.innerHeight || document.documentElement.clientHeight || 240;
@@ -1411,17 +886,9 @@ function boot() {
       this.host.style.height = 'auto';
       this.host.style.overflow = 'visible';
 
-      let x = (this.anchor && this.anchor.x) || 24;
-      let y = (this.anchor && this.anchor.y) || 24;
-      const placed = this.snapshot ? getPlacementRects(this.snapshot) : null;
-      if (this.mode === 'popup' && placed && placed.rects.length) {
-        const union = unionRect(placed.rects);
-        x = union.left;
-        y = union.bottom + 6;
-      }
-
-      this.host.style.left = `${Math.max(margin, x)}px`;
-      this.host.style.top = `${Math.max(margin, y)}px`;
+      const anchor = this.getAnchor() || { x: 24, y: 24 };
+      this.host.style.left = `${Math.max(margin, anchor.x)}px`;
+      this.host.style.top = `${Math.max(margin, anchor.y)}px`;
 
       const rect = this.host.getBoundingClientRect();
       let left = rect.left;
@@ -1429,8 +896,13 @@ function boot() {
       const w = rect.width || maxW;
       const h = rect.height || 80;
       if (left + w + margin > vw) left = vw - w - margin;
-      if (top + h + margin > vh) top = Math.max(margin, y - h - 12);
-      if (top + h + margin > vh) top = vh - h - margin;
+      if (top + h + margin > vh) {
+        if (anchor.sourceRect && anchor.sourceRect.top - h - margin >= margin) {
+          top = anchor.sourceRect.top - h - 8;
+        } else {
+          top = Math.max(margin, vh - h - margin);
+        }
+      }
       if (left < margin) left = margin;
       if (top < margin) top = margin;
       this.host.style.left = `${left}px`;
@@ -1441,7 +913,6 @@ function boot() {
       if (this.destroyed) return;
       this.destroyed = true;
       clearTimeout(this.errorTimer);
-      try { this.resizeObserver.disconnect(); } catch (_err) { /* ignore */ }
       window.removeEventListener('resize', this.onSync, true);
       document.removeEventListener('scroll', this.onSync, true);
       if (window.visualViewport) {
@@ -1451,6 +922,7 @@ function boot() {
       this.host.remove();
       activeOverlays.delete(this);
       if (currentSelectionView === this) currentSelectionView = null;
+      if (this.img && overlays.get(this.img) === this) overlays.delete(this.img);
     }
   }
 

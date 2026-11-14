@@ -7,7 +7,67 @@ const MENU_ROOT_ID = 'cit-translate-root';
 const MENU_GOOGLE_ID = 'cit-translate-google';
 const MENU_BING_ID = 'cit-translate-bing';
 const MENU_HINT_ID = 'cit-menu-hint';
-const TARGET_LANG = 'zh-CN';
+const TARGET_ZH = 'zh-CN';
+const TARGET_EN = 'en';
+const BING_TO_ZH = 'zh-Hans';
+const BING_TO_EN = 'en';
+
+// Characters that appear in only one of the two standard written forms.
+// Shared characters such as 你/好/是/的 are ignored. If there are no exclusive
+// markers, Chinese text is treated as Simplified (the user's exception case).
+const SIMP_ONLY = new Set(
+  '爱办报备贝笔边变宾补参仓层产车彻尘陈衬称诚迟齿冲虫处触从达带单担胆党导灯敌递点电东动冻读断对队儿尔发范饭飞废费奋愤风缝妇复盖赶干钢个给关观广汉号后护划怀坏欢环会机积级计记济继价驾间艰检简减荐见将奖讲较节结仅紧进尽经惊举剧据克垦恳库况扩阔来兰蓝栏乐类离里礼历丽联练粮两疗辽邻灵龄领龙楼录陆驴乱论罗吗买麦门们梦面庙亩纳难恼脑农盘齐气迁签钱浅枪墙桥窃亲庆穷区驱权劝让扰热认荣虽扫杀伤烧设摄识时实势师湿适释数术帅双顺说丝肃随损摊坛叹汤讨誊体条听铜统头图涂团袜弯湾万网为卫务雾无习戏虾吓鲜闲显险县现线乡详响项须许绪续选压亚严颜盐杨扬养样钥页业医遗仪蚁艺阴隐应营拥优犹与屿语誉预员缘远愿跃运杂载赞赃脏枣灶则泽这针侦诊阵镇症证织职执纸质钟种肿众专转庄装壮准综总纵钻'
+);
+const TRAD_ONLY = new Set(
+  '愛辦報備貝筆邊變賓補參倉層產車徹塵陳襯稱誠遲齒衝蟲處觸從達帶單擔膽黨導燈敵遞點電東動凍讀斷對隊兒爾發範飯飛廢費奮憤風縫婦復蓋趕幹鋼個給關觀廣漢號後護劃懷壞歡環會機積級計記濟繼價駕間艱檢簡減薦見將獎講較節結僅緊進盡經驚舉劇據剋墾懇庫況擴闊來蘭藍欄樂類離裡裏禮歷麗聯練糧兩療遼鄰靈齡領龍樓錄陸驢亂論羅嗎買麥門們夢麵廟畝納難惱腦農盤齊氣遷簽錢淺槍牆橋竊親慶窮區驅權勸讓擾熱認榮雖掃殺傷燒設攝識時實勢師濕適釋數術帥雙順說絲肅隨損攤壇嘆湯討謄體條聽銅統頭圖塗團襪彎灣萬網為衛務霧無習戲蝦嚇鮮閒顯險縣現線鄉詳響項須許緒續選壓亞嚴顏鹽楊揚養樣鑰頁業醫遺儀蟻藝陰隱應營擁優猶與嶼語譽預員緣遠願躍運雜載贊贓髒棗竈則澤這針偵診陣鎮症證織職執紙質鐘種腫眾專轉莊裝壯準綜總縱鑽國學過還開麼臺灣廳廠義戰寫黨齊龍龜鬱'
+);
+
+function countMarkers(text, set) {
+  let n = 0;
+  for (const ch of String(text || '')) {
+    if (set.has(ch)) n += 1;
+  }
+  return n;
+}
+
+function isSimplifiedChineseSource(text) {
+  const sample = String(text || '');
+  const han = [];
+  let letters = 0;
+  let kana = 0;
+  let hangul = 0;
+  for (const ch of sample) {
+    if (/\p{Script=Han}/u.test(ch)) {
+      han.push(ch);
+      letters += 1;
+    } else if (/\p{Script=Hiragana}|\p{Script=Katakana}/u.test(ch)) {
+      kana += 1;
+      letters += 1;
+    } else if (/\p{Script=Hangul}/u.test(ch)) {
+      hangul += 1;
+      letters += 1;
+    } else if (/\p{L}/u.test(ch)) {
+      letters += 1;
+    }
+  }
+  // Japanese / Korean are not Chinese.
+  if (kana >= 2 && kana >= Math.max(1, han.length * 0.15)) return false;
+  if (hangul >= 2 && hangul >= han.length) return false;
+  if (han.length === 0) return false;
+  if (letters >= 8 && han.length / letters < 0.25) return false;
+  const trad = countMarkers(sample, TRAD_ONLY);
+  const simp = countMarkers(sample, SIMP_ONLY);
+  if (trad > simp) return false;
+  return true;
+}
+
+function resolveTargets(text) {
+  if (isSimplifiedChineseSource(text)) {
+    return { google: TARGET_EN, bing: BING_TO_EN };
+  }
+  return { google: TARGET_ZH, bing: BING_TO_ZH };
+}
+
 const TRANSLATE_URL = 'https://translate-pa.googleapis.com/v1/translateHtml';
 // Public te_lib client key embedded in Google's official translate library (not a user secret).
 const TRANSLATE_API_KEY = 'AIzaSyATBXajvzQLTDHEQbcpq0Ihe0vWDHmO520';
@@ -192,7 +252,7 @@ async function ocrImage(buffer, mime) {
   return response.result;
 }
 
-async function requestTranslateChunk(chunk) {
+async function requestTranslateChunk(chunk, targetLang) {
   let res;
   try {
     res = await fetch(TRANSLATE_URL, {
@@ -201,7 +261,7 @@ async function requestTranslateChunk(chunk) {
         'Content-Type': 'application/json+protobuf',
         'X-Goog-API-Key': TRANSLATE_API_KEY
       },
-      body: JSON.stringify([[chunk, 'auto', TARGET_LANG], 'te_lib'])
+      body: JSON.stringify([[chunk, 'auto', targetLang || TARGET_ZH], 'te_lib'])
     });
   } catch (err) {
     throw new Error(friendlyError(err, '谷歌翻译失败，请稍后重试'));
@@ -224,15 +284,15 @@ async function requestTranslateChunk(chunk) {
   return translated.map((item) => (item == null ? '' : String(item)));
 }
 
-async function translateChunk(chunk) {
+async function translateChunk(chunk, targetLang) {
   try {
-    return await requestTranslateChunk(chunk);
+    return await requestTranslateChunk(chunk, targetLang);
   } catch (err) {
     if (err.status !== 400 || chunk.length === 1) throw err;
     const out = [];
     for (const line of chunk) {
       try {
-        const [translated] = await requestTranslateChunk([line]);
+        const [translated] = await requestTranslateChunk([line], targetLang);
         out.push(translated);
       } catch (inner) {
         if (inner.status !== 400) throw inner;
@@ -243,7 +303,7 @@ async function translateChunk(chunk) {
   }
 }
 
-async function translateLinesGoogle(lines) {
+async function translateLinesGoogle(lines, targetLang) {
   const source = (lines || []).map((line) => (line == null ? '' : String(line)));
   if (!source.length) return [];
   const out = source.map(() => '');
@@ -255,7 +315,7 @@ async function translateLinesGoogle(lines) {
   if (!work.length) return out;
   for (let i = 0; i < work.length; i += TRANSLATE_CHUNK) {
     const chunkItems = work.slice(i, i + TRANSLATE_CHUNK);
-    const translated = await translateChunk(chunkItems.map((item) => item.text));
+    const translated = await translateChunk(chunkItems.map((item) => item.text), targetLang);
     chunkItems.forEach((item, j) => {
       out[item.index] = translated[j] == null ? '' : String(translated[j]);
     });
@@ -334,7 +394,7 @@ function extractBingTranslatedText(data) {
   return null;
 }
 
-async function requestBingText(text, allowRefresh) {
+async function requestBingText(text, allowRefresh, targetLang) {
   if (text === '') return '';
   const session = await getBingSession(false);
   const api = `${session.origin}/ttranslatev3?isVertical=1&IG=${encodeURIComponent(session.ig)}&IID=${encodeURIComponent(session.iid)}`;
@@ -347,7 +407,7 @@ async function requestBingText(text, allowRefresh) {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
         fromLang: 'auto-detect',
-        to: 'zh-Hans',
+        to: targetLang || BING_TO_ZH,
         text,
         token: session.token,
         key: session.key
@@ -367,7 +427,7 @@ async function requestBingText(text, allowRefresh) {
   if (allowRefresh !== false && (statusCode === 205 || statusCode === 400)) {
     bingSession = null;
     await getBingSession(true);
-    return requestBingText(text, false);
+    return requestBingText(text, false, targetLang);
   }
   if (!res.ok || statusCode) {
     throw new Error(`必应翻译暂时不可用（${statusCode || res.status}）`);
@@ -377,18 +437,18 @@ async function requestBingText(text, allowRefresh) {
   return translated;
 }
 
-async function translateBingLineGroup(lines) {
-  const translated = await requestBingText(lines.join('\n'));
+async function translateBingLineGroup(lines, targetLang) {
+  const translated = await requestBingText(lines.join('\n'), true, targetLang);
   const parts = String(translated).split('\n');
   if (parts.length === lines.length) return parts;
   const out = lines.map(() => '');
   for (let i = 0; i < lines.length; i++) {
-    out[i] = lines[i] === '' ? '' : await requestBingText(lines[i]);
+    out[i] = lines[i] === '' ? '' : await requestBingText(lines[i], true, targetLang);
   }
   return out;
 }
 
-async function translateLinesBing(lines) {
+async function translateLinesBing(lines, targetLang) {
   const source = (lines || []).map((line) => (line == null ? '' : String(line)));
   if (!source.length) return [];
   if (!source.some((line) => line !== '')) return source.map(() => '');
@@ -405,16 +465,16 @@ async function translateLinesBing(lines) {
       if (source[end - 1].length >= BING_MAX_CHARS) break;
     }
     const group = source.slice(start, end);
-    const translated = await translateBingLineGroup(group);
+    const translated = await translateBingLineGroup(group, targetLang);
     out.push(...translated);
     start = end;
   }
   return out;
 }
 
-async function translateLines(lines, engine) {
-  if (engine === 'bing') return translateLinesBing(lines);
-  return translateLinesGoogle(lines);
+async function translateLines(lines, engine, targetLang) {
+  if (engine === 'bing') return translateLinesBing(lines, targetLang);
+  return translateLinesGoogle(lines, targetLang);
 }
 
 async function ensureContentScript(tabId, frameId) {
@@ -522,7 +582,8 @@ async function handleSelectionTranslate(info, tab, engine) {
     }
 
     const parts = splitSelectionText(source);
-    const translatedParts = await translateLines(parts, engine);
+    const targets = resolveTargets(source);
+    const translatedParts = await translateLines(parts, engine, engine === 'bing' ? targets.bing : targets.google);
     const translated = translatedParts.join('\n');
 
     await sendToFrame(tabId, frameId, {
@@ -605,7 +666,9 @@ async function handleImageTranslate(info, tab, engine) {
       return;
     }
 
-    const translations = await translateLines(units.map((unit) => unit.text), engine);
+    const sourceLines = units.map((unit) => unit.text);
+    const targets = resolveTargets(sourceLines.join('\n'));
+    const translations = await translateLines(sourceLines, engine, engine === 'bing' ? targets.bing : targets.google);
     const boxes = units.map((unit, index) => ({
       text: translations[index] || unit.text,
       source: unit.text,
@@ -615,6 +678,7 @@ async function handleImageTranslate(info, tab, engine) {
     await sendToFrame(tabId, frameId, {
       type: 'CIT_RESULT',
       requestId,
+      text: translations.join('\n'),
       boxes,
       imageWidth: ocr.imageWidth,
       imageHeight: ocr.imageHeight
