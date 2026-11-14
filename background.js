@@ -3,19 +3,38 @@
 
 importScripts('buffer-codec.js');
 
-const MENU_ID = 'cit-translate-image';
+const MENU_ROOT_ID = 'cit-translate-root';
+const MENU_GOOGLE_ID = 'cit-translate-google';
+const MENU_BING_ID = 'cit-translate-bing';
 const TARGET_LANG = 'zh-CN';
 const TRANSLATE_URL = 'https://translate-pa.googleapis.com/v1/translateHtml';
 // Public te_lib client key embedded in Google's official translate library (not a user secret).
 const TRANSLATE_API_KEY = 'AIzaSyATBXajvzQLTDHEQbcpq0Ihe0vWDHmO520';
 const OCR_TIMEOUT_MS = 90000;
 const TRANSLATE_CHUNK = 80;
+const BING_MAX_CHARS = 1000;
+const BING_SESSION_URLS = [
+  'https://www.bing.com/translator',
+  'https://cn.bing.com/translator'
+];
 
 function setupMenus() {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
-      id: MENU_ID,
+      id: MENU_ROOT_ID,
       title: '翻译',
+      contexts: ['image', 'selection']
+    });
+    chrome.contextMenus.create({
+      id: MENU_GOOGLE_ID,
+      parentId: MENU_ROOT_ID,
+      title: '谷歌翻译',
+      contexts: ['image', 'selection']
+    });
+    chrome.contextMenus.create({
+      id: MENU_BING_ID,
+      parentId: MENU_ROOT_ID,
+      title: '必应翻译',
       contexts: ['image', 'selection']
     });
   });
@@ -139,10 +158,10 @@ async function requestTranslateChunk(chunk) {
       body: JSON.stringify([[chunk, 'auto', TARGET_LANG], 'te_lib'])
     });
   } catch (err) {
-    throw new Error(friendlyError(err, '翻译失败，请稍后重试'));
+    throw new Error(friendlyError(err, '谷歌翻译失败，请稍后重试'));
   }
   if (!res.ok) {
-    const error = new Error(`翻译服务暂时不可用（${res.status}）`);
+    const error = new Error(`谷歌翻译暂时不可用（${res.status}）`);
     error.status = res.status;
     throw error;
   }
@@ -178,7 +197,7 @@ async function translateChunk(chunk) {
   }
 }
 
-async function translateLines(lines) {
+async function translateLinesGoogle(lines) {
   const source = (lines || []).map((line) => (line == null ? '' : String(line)));
   if (!source.length) return [];
   const out = source.map(() => '');
@@ -196,6 +215,160 @@ async function translateLines(lines) {
     });
   }
   return out;
+}
+
+let bingSession = null;
+let bingSessionPromise = null;
+
+function parseBingSession(html, pageUrl) {
+  const ig = html.match(/IG:"([0-9A-Fa-f]+)"/);
+  const helper = html.match(/params_AbusePreventionHelper\s*=\s*(\[[^\]]+\])/);
+  if (!ig || !helper) return null;
+  const params = JSON.parse(helper[1]);
+  const iid = html.match(/data-iid="([^"]+)"/);
+  const ttl = Number(params[2]) || 3600000;
+  return {
+    origin: new URL(pageUrl).origin,
+    ig: ig[1],
+    iid: (iid && iid[1]) || 'translator.5023',
+    token: String(params[1] || ''),
+    key: String(params[0] || ''),
+    expireAt: Date.now() + Math.max(60 * 1000, ttl - 60 * 1000)
+  };
+}
+
+async function getBingSession(force) {
+  if (!force && bingSession && Date.now() < bingSession.expireAt) {
+    return bingSession;
+  }
+  if (bingSessionPromise && !force) {
+    return bingSessionPromise;
+  }
+  const run = (async () => {
+    let lastError = new Error('必应翻译暂时不可用');
+    for (const url of BING_SESSION_URLS) {
+      try {
+        const res = await fetch(url, {
+          method: 'GET',
+          credentials: 'omit',
+          redirect: 'follow',
+          signal: AbortSignal.timeout(10000)
+        });
+        if (!res.ok) {
+          lastError = new Error(`必应翻译页面无法打开（${res.status}）`);
+          continue;
+        }
+        const html = await res.text();
+        const session = parseBingSession(html, res.url || url);
+        if (!session || !session.token || !session.key) {
+          lastError = new Error('必应翻译参数解析失败');
+          continue;
+        }
+        bingSession = session;
+        return session;
+      } catch (err) {
+        lastError = new Error(friendlyError(err, '必应翻译暂时不可用'));
+      }
+    }
+    throw lastError;
+  })();
+  bingSessionPromise = run;
+  try {
+    return await run;
+  } finally {
+    if (bingSessionPromise === run) bingSessionPromise = null;
+  }
+}
+
+function extractBingTranslatedText(data) {
+  if (Array.isArray(data) && data[0] && Array.isArray(data[0].translations) && data[0].translations[0]) {
+    const text = data[0].translations[0].text;
+    if (typeof text === 'string') return text;
+  }
+  return null;
+}
+
+async function requestBingText(text, allowRefresh) {
+  if (text === '') return '';
+  const session = await getBingSession(false);
+  const api = `${session.origin}/ttranslatev3?isVertical=1&IG=${encodeURIComponent(session.ig)}&IID=${encodeURIComponent(session.iid)}`;
+  let res;
+  try {
+    res = await fetch(api, {
+      method: 'POST',
+      credentials: 'omit',
+      signal: AbortSignal.timeout(20000),
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        fromLang: 'auto-detect',
+        to: 'zh-Hans',
+        text,
+        token: session.token,
+        key: session.key
+      })
+    });
+  } catch (err) {
+    throw new Error(friendlyError(err, '必应翻译失败，请检查网络后重试'));
+  }
+  const raw = await res.text();
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch (_err) {
+    throw new Error('必应翻译结果格式异常');
+  }
+  const statusCode = data && !Array.isArray(data) ? Number(data.statusCode) : 0;
+  if (allowRefresh !== false && (statusCode === 205 || statusCode === 400)) {
+    bingSession = null;
+    await getBingSession(true);
+    return requestBingText(text, false);
+  }
+  if (!res.ok || statusCode) {
+    throw new Error(`必应翻译暂时不可用（${statusCode || res.status}）`);
+  }
+  const translated = extractBingTranslatedText(data);
+  if (translated == null) throw new Error('必应翻译结果格式异常');
+  return translated;
+}
+
+async function translateBingLineGroup(lines) {
+  const translated = await requestBingText(lines.join('\n'));
+  const parts = String(translated).split('\n');
+  if (parts.length === lines.length) return parts;
+  const out = lines.map(() => '');
+  for (let i = 0; i < lines.length; i++) {
+    out[i] = lines[i] === '' ? '' : await requestBingText(lines[i]);
+  }
+  return out;
+}
+
+async function translateLinesBing(lines) {
+  const source = (lines || []).map((line) => (line == null ? '' : String(line)));
+  if (!source.length) return [];
+  if (!source.some((line) => line !== '')) return source.map(() => '');
+  const out = [];
+  let start = 0;
+  while (start < source.length) {
+    let end = start;
+    let size = 0;
+    while (end < source.length) {
+      const extra = source[end].length + (end > start ? 1 : 0);
+      if (end > start && size + extra > BING_MAX_CHARS) break;
+      size += extra;
+      end += 1;
+      if (source[end - 1].length >= BING_MAX_CHARS) break;
+    }
+    const group = source.slice(start, end);
+    const translated = await translateBingLineGroup(group);
+    out.push(...translated);
+    start = end;
+  }
+  return out;
+}
+
+async function translateLines(lines, engine) {
+  if (engine === 'bing') return translateLinesBing(lines);
+  return translateLinesGoogle(lines);
 }
 
 async function ensureContentScript(tabId, frameId) {
@@ -216,7 +389,8 @@ async function sendToFrame(tabId, frameId, message) {
 }
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId !== MENU_ID || !tab || tab.id == null) return;
+  if (info.menuItemId !== MENU_GOOGLE_ID && info.menuItemId !== MENU_BING_ID) return;
+  if (!tab || tab.id == null) return;
   handleTranslateClick(info, tab);
 });
 
@@ -230,14 +404,19 @@ function splitSelectionText(text) {
   return [normalized];
 }
 
-async function handleTranslateClick(info, tab) {
-  if (isImageClick(info)) {
-    return handleImageTranslate(info, tab);
-  }
-  return handleSelectionTranslate(info, tab);
+function engineFromMenu(info) {
+  return info.menuItemId === MENU_BING_ID ? 'bing' : 'google';
 }
 
-async function handleSelectionTranslate(info, tab) {
+async function handleTranslateClick(info, tab) {
+  const engine = engineFromMenu(info);
+  if (isImageClick(info)) {
+    return handleImageTranslate(info, tab, engine);
+  }
+  return handleSelectionTranslate(info, tab, engine);
+}
+
+async function handleSelectionTranslate(info, tab, engine) {
   const tabId = tab.id;
   const frameId = info.frameId ?? 0;
   const requestId = `tr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -272,7 +451,7 @@ async function handleSelectionTranslate(info, tab) {
     }
 
     const parts = splitSelectionText(source);
-    const translatedParts = await translateLines(parts);
+    const translatedParts = await translateLines(parts, engine);
     const translated = translatedParts.join('\n');
 
     await sendToFrame(tabId, frameId, {
@@ -287,7 +466,7 @@ async function handleSelectionTranslate(info, tab) {
   }
 }
 
-async function handleImageTranslate(info, tab) {
+async function handleImageTranslate(info, tab, engine) {
   const tabId = tab.id;
   const frameId = info.frameId ?? 0;
   const requestId = `tr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -355,7 +534,7 @@ async function handleImageTranslate(info, tab) {
       return;
     }
 
-    const translations = await translateLines(units.map((unit) => unit.text));
+    const translations = await translateLines(units.map((unit) => unit.text), engine);
     const boxes = units.map((unit, index) => ({
       text: translations[index] || unit.text,
       source: unit.text,
