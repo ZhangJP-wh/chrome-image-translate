@@ -6,7 +6,7 @@ let workerPromise = null;
 function getWorker() {
   if (!workerPromise) {
     workerPromise = (async () => {
-      const worker = await Tesseract.createWorker('eng', 1, {
+      const worker = await Tesseract.createWorker('eng+chi_sim', 1, {
         workerPath: chrome.runtime.getURL('lib/worker.min.js'),
         corePath: chrome.runtime.getURL('lib'),
         langPath: chrome.runtime.getURL('tessdata'),
@@ -103,10 +103,14 @@ function pushUnit(units, text, bbox, confidence, invScale) {
   const x1 = bbox.x1 * invScale;
   const y1 = bbox.y1 * invScale;
   if ((x1 - x0) < 2 || (y1 - y0) < 2) return;
-  units.push({
+  const unit = {
     text: cleaned,
     bbox: { x0, y0, x1, y1 }
-  });
+  };
+  if (confidence != null && Number.isFinite(Number(confidence))) {
+    unit.confidence = Math.round(Number(confidence));
+  }
+  units.push(unit);
 }
 
 function groupWordsIntoLines(words) {
@@ -176,13 +180,28 @@ function groupUnits(data, invScale, imageWidth, imageHeight) {
   const units = [];
   const collected = collectFromBlocks(data);
 
-  for (const paragraph of collected.paragraphs) {
-    pushUnit(units, paragraph.text, paragraph.bbox, paragraph.confidence, invScale);
+  // Prefer line boxes so the floating window can keep the original line breaks.
+  const seen = new Set();
+  const pushUnique = (item, text, bbox, confidence) => {
+    const before = units.length;
+    pushUnit(units, text, bbox, confidence, invScale);
+    if (units.length === before) return;
+    const last = units[units.length - 1];
+    const key = [last.text, Math.round(last.bbox.x0), Math.round(last.bbox.y0), Math.round(last.bbox.x1), Math.round(last.bbox.y1)].join('\t');
+    if (seen.has(key)) {
+      units.pop();
+      return;
+    }
+    seen.add(key);
+  };
+
+  for (const line of collected.lines) {
+    pushUnique(line, line.text, line.bbox, line.confidence);
   }
   if (units.length) return units;
 
-  for (const line of collected.lines) {
-    pushUnit(units, line.text, line.bbox, line.confidence, invScale);
+  for (const paragraph of collected.paragraphs) {
+    pushUnique(paragraph, paragraph.text, paragraph.bbox, paragraph.confidence);
   }
   if (units.length) return units;
 

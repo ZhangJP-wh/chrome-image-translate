@@ -7,7 +7,7 @@
       :root { color-scheme: light; }
       body {
         margin: 0;
-        width: 280px;
+        width: 300px;
         font: 13px/1.55 "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
         color: #202124;
         background: #fff;
@@ -20,13 +20,38 @@
       }
       header img { width: 24px; height: 24px; }
       h1 { margin: 0; font-size: 15px; font-weight: 650; }
+      h2 {
+        margin: 0;
+        padding: 0 14px;
+        font-size: 12px;
+        font-weight: 650;
+        color: #5f6368;
+      }
       ol, p { margin: 0; }
       ol { padding: 0 14px 12px 32px; }
       li { margin: 4px 0; }
-      .hint {
-        padding: 8px 14px 14px;
+      .settings {
+        padding: 4px 14px 8px;
+      }
+      label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 0;
+        cursor: pointer;
+      }
+      .menu-hint, .hint {
+        padding: 0 14px 12px;
         color: #5f6368;
         font-size: 12px;
+      }
+      .hint { padding-bottom: 14px; }
+      #engine-settings.focus-target {
+        background: #e8f0fe;
+        box-shadow: inset 0 0 0 2px #1a73e8;
+        border-radius: 8px;
+        margin: 0 8px 8px;
+        padding: 8px 6px 4px;
       }
     </style>
   </head>
@@ -35,12 +60,20 @@
       <img src="icons/icon32.png" alt="">
       <h1>图片翻译</h1>
     </header>
+    <div id="engine-settings">
+      <h2>右键菜单里显示</h2>
+      <div class="settings">
+        <label><input id="engine-google" type="checkbox"> 谷歌翻译</label>
+        <label><input id="engine-bing" type="checkbox"> 必应翻译（中国大陆通常可用）</label>
+      </div>
+      <p id="menu-hint" class="menu-hint"></p>
+    </div>
     <ol>
-      <li>在网页的图片上右键，或先选中文字再右键</li>
-      <li>在「翻译」子菜单里选择「谷歌翻译」或「必应翻译」（后者在中国大陆通常可用，无需申请密钥）</li>
-      <li>图片：简体中文会覆盖在原图对应文字上。选中的文字：尽量覆盖在原句位置；无法覆盖时，会在当前页弹出译文（不会打开新标签）</li>
-      <li>可用「显示原文 / 显示译文」切换，或点「关闭」去掉覆盖层或弹窗</li>
+      <li>在网页的图片上右键，或先选中文字再右键，再选择要使用的翻译服务</li>
+      <li>图片和选中文字的译文都会显示在当前页的悬浮小窗里，可用鼠标拖动，也可以选中窗里的文字。小窗会按译文长短自动调节，并尽量保持原文的分段、换行和对齐，方便对照。点「关闭」即可去掉小窗。</li>
+      <li>不是中文的内容会译成简体中文；如果原文是简体中文，则译成英文。</li>
     </ol>
-    <p class="hint">第一次翻译图片可能需要几秒来加载识别组件。请尽量选择文字清晰的图片。输入框里的选中文字会以弹窗显示译文。</p>
+    <p class="hint">第一次翻译图片可能需要几秒来加载识别组件。请尽量选择文字清晰的图片。输入框里的选中文字会以弹窗显示译文。至少要保留一个翻译选项。</p>
+    <script src="popup.js"></script>
   </body>
 </html>

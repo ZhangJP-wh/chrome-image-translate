@@ -12,16 +12,71 @@ function boot() {
   let lastContextImage = null;
   let lastContextTime = 0;
   let lastSelectionSnapshot = null;
+  let lastGoodSelectionSnapshot = null;
+  let lastPointer = null;
   let currentSelectionView = null;
 
-  document.addEventListener('contextmenu', (event) => {
-    const img = findImageInEvent(event);
-    if (img) {
-      lastContextImage = img;
-      lastContextTime = Date.now();
+  function rememberPointer(event) {
+    if (!event || !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) return;
+    lastPointer = { x: event.clientX, y: event.clientY, time: Date.now() };
+  }
+
+  function lastPointerMouse(maxAge) {
+    const age = Number.isFinite(maxAge) ? maxAge : 120000;
+    if (!lastPointer || (Date.now() - lastPointer.time) > age) return null;
+    return { x: lastPointer.x, y: lastPointer.y };
+  }
+
+  function rememberGoodSnapshot(snapshot) {
+    if (snapshot && String(snapshot.text || '').trim()) {
+      lastGoodSelectionSnapshot = snapshot;
     }
-    lastSelectionSnapshot = captureSelectionSnapshot(event);
-  }, true);
+  }
+
+  function onContextMenuCapture(event) {
+    rememberPointer(event);
+    try {
+      const img = findImageInEvent(event);
+      if (img) {
+        lastContextImage = img;
+        lastContextTime = Date.now();
+      }
+    } catch (_err) {}
+    try {
+      const snap = captureSelectionSnapshot(event);
+      if (snap && String(snap.text || '').trim()) {
+        lastSelectionSnapshot = snap;
+        rememberGoodSnapshot(snap);
+      } else if (lastGoodSelectionSnapshot) {
+        lastSelectionSnapshot = Object.assign({}, lastGoodSelectionSnapshot, {
+          mouse: { x: event.clientX, y: event.clientY },
+          time: Date.now()
+        });
+      } else {
+        lastSelectionSnapshot = snap;
+      }
+    } catch (_err) {
+      if (lastGoodSelectionSnapshot) {
+        lastSelectionSnapshot = Object.assign({}, lastGoodSelectionSnapshot, {
+          mouse: { x: event.clientX, y: event.clientY },
+          time: Date.now()
+        });
+      }
+    }
+  }
+
+  window.addEventListener('pointerdown', rememberPointer, true);
+  window.addEventListener('contextmenu', onContextMenuCapture, true);
+
+  let selectionChangeTimer = 0;
+  document.addEventListener('selectionchange', () => {
+    clearTimeout(selectionChangeTimer);
+    selectionChangeTimer = setTimeout(() => {
+      try {
+        rememberGoodSnapshot(captureSelectionSnapshot(null));
+      } catch (_err) {}
+    }, 80);
+  });
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (!message || !message.type) return undefined;
@@ -43,9 +98,7 @@ function boot() {
     }
     if (message.type === 'CIT_SELECTION_RESULT') {
       const overlay = findOverlayByRequest(message.requestId);
-      if (overlay && overlay.showSelectionResult) {
-        overlay.showSelectionResult(message.source || '', message.text || '');
-      }
+      if (overlay) overlay.showResult(message.text || '', message.blocks || null);
       return undefined;
     }
     if (message.type === 'CIT_FETCH_FROM_PAGE') {
@@ -58,7 +111,19 @@ function boot() {
     }
     if (message.type === 'CIT_RESULT') {
       const overlay = findOverlayByRequest(message.requestId);
-      if (overlay) overlay.showBoxes(message.boxes || [], message.imageWidth, message.imageHeight);
+      if (overlay) {
+        const joined = (message.text != null && String(message.text))
+          || (message.boxes || []).map((item) => (item && item.text) ? String(item.text) : '').join('\n');
+        const layout = CITLayout.layoutOcrBoxes(message.boxes || [], message.imageWidth || 0);
+        const blocks = layout.blocks || [];
+        overlay.ocrLayout = layout.column ? {
+          column: layout.column,
+          textRects: layout.textRects || [],
+          imageWidth: message.imageWidth || 0,
+          imageHeight: message.imageHeight || 0
+        } : null;
+        overlay.showResult(joined, blocks.length ? blocks : null);
+      }
       return undefined;
     }
     if (message.type === 'CIT_ERROR') {
@@ -172,7 +237,12 @@ function boot() {
 
     let overlay = overlays.get(img);
     if (overlay) overlay.destroy();
-    overlay = new Overlay(img, message.requestId);
+    let created = null;
+    created = new FloatPanel(message.requestId, () => anchorFromImage(img, created && created.ocrLayout), {
+      img,
+      anchorEl: img
+    });
+    overlay = created;
     overlays.set(img, overlay);
     activeOverlays.add(overlay);
     overlay.showLoading();
@@ -359,400 +429,97 @@ function boot() {
     };
   }
 
-  const OVERLAY_CSS = `
+
+  const SNAPSHOT_MAX_AGE_MS = 60000;
+  const FLOAT_CSS = `
     :host { all: initial; }
-    .wrap {
-      position: relative;
+    .popup {
+      box-sizing: border-box;
+      pointer-events: auto;
+      background: #fff;
+      color: #202124;
+      border-radius: 8px;
+      padding: 0;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
+      border: 1px solid rgba(32, 33, 36, 0.12);
       width: 100%;
-      height: 100%;
-      overflow: hidden;
-      pointer-events: none;
+      min-width: 0;
       font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Heiti SC", sans-serif;
     }
-    .status {
-      position: absolute;
-      inset: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: rgba(32, 33, 36, 0.32);
-      z-index: 1;
-    }
-    .card {
-      pointer-events: auto;
+    .popup.is-error,
+    .popup.is-loading {
       background: rgba(32, 33, 36, 0.94);
       color: #fff;
-      border-radius: 8px;
-      padding: 10px 16px;
-      font-size: 14px;
-      line-height: 1.4;
-      max-width: calc(100% - 24px);
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
-      display: flex;
-      align-items: center;
-      gap: 8px;
+      border-color: transparent;
     }
-    .spinner {
-      width: 14px;
-      height: 14px;
-      border: 2px solid rgba(255,255,255,0.35);
-      border-top-color: #fff;
-      border-radius: 50%;
-      animation: cit-spin 0.8s linear infinite;
-      flex: 0 0 auto;
-    }
-    @keyframes cit-spin { to { transform: rotate(360deg); } }
-    .box {
-      position: absolute;
-      box-sizing: border-box;
-      background: rgba(255, 255, 255, 0.92);
-      border-radius: 2px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      overflow: hidden;
-      padding: 1px 3px;
-    }
-    .box .text {
-      color: #202124;
-      text-align: center;
-      width: 100%;
-      overflow-wrap: anywhere;
-      word-break: break-word;
-      line-height: 1.25;
-      font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Heiti SC", sans-serif;
-    }
-    .wrap.is-original .box { visibility: hidden; }
     .toolbar {
-      position: absolute;
-      top: 8px;
-      right: 8px;
       display: flex;
+      align-items: center;
+      justify-content: flex-end;
       gap: 6px;
-      pointer-events: auto;
-      z-index: 2;
-      filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.28));
+      padding: 8px 10px 0;
+      cursor: move;
+      user-select: none;
     }
     .toolbar button {
       appearance: none;
       border: 0;
       margin: 0;
       cursor: pointer;
-      background: #fff;
+      background: #f1f3f4;
       color: #202124;
       font-size: 12px;
       line-height: 1;
       padding: 6px 8px;
       border-radius: 4px;
-      font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Heiti SC", sans-serif;
+      font-family: inherit;
     }
-    .toolbar button:hover { background: #f1f3f4; }
-    .hidden { display: none !important; }
-  `;
-
-  class Overlay {
-    constructor(img, requestId) {
-      this.img = img;
-      this.requestId = requestId;
-      this.boxes = [];
-      this.coordWidth = img.naturalWidth || 0;
-      this.coordHeight = img.naturalHeight || 0;
-      this.showingOriginal = false;
-      this.destroyed = false;
-      this.errorTimer = 0;
-
-      this.host = document.createElement('div');
-      this.host.setAttribute('data-cit-overlay', '1');
-      this.host.style.cssText = [
-        'all: initial',
-        'display: block',
-        'position: fixed',
-        'left: 0',
-        'top: 0',
-        'width: 0',
-        'height: 0',
-        'overflow: hidden',
-        'z-index: 2147483646',
-        'pointer-events: none',
-        'margin: 0',
-        'padding: 0',
-        'border: 0',
-        'box-sizing: border-box'
-      ].join(';');
-
-      this.shadow = this.host.attachShadow({ mode: 'open' });
-      const style = document.createElement('style');
-      style.textContent = OVERLAY_CSS;
-      this.wrap = document.createElement('div');
-      this.wrap.className = 'wrap';
-      this.shadow.append(style, this.wrap);
-      (document.documentElement || document.body).appendChild(this.host);
-
-      this.onSync = () => this.syncPosition();
-      this.resizeObserver = new ResizeObserver(this.onSync);
-      this.resizeObserver.observe(img);
-      window.addEventListener('resize', this.onSync, true);
-      document.addEventListener('scroll', this.onSync, true);
-      if (window.visualViewport) {
-        window.visualViewport.addEventListener('resize', this.onSync);
-        window.visualViewport.addEventListener('scroll', this.onSync);
-      }
-      this.syncPosition();
-    }
-
-    syncPosition() {
-      if (this.destroyed) return;
-      if (!isElementCurrent(this.img)) {
-        this.destroy();
-        return;
-      }
-      const map = getImageMapping(this.img);
-      this.mapping = map;
-      this.host.style.left = `${map.cssLeft}px`;
-      this.host.style.top = `${map.cssTop}px`;
-      this.host.style.width = `${map.cssWidth}px`;
-      this.host.style.height = `${map.cssHeight}px`;
-      this.layoutBoxes();
-    }
-
-    clearStage() {
-      this.wrap.replaceChildren();
-      this.wrap.classList.remove('is-original');
-    }
-
-    showLoading() {
-      this.clearStage();
-      const status = document.createElement('div');
-      status.className = 'status';
-      status.innerHTML = '<div class="card"><span class="spinner"></span><span>翻译中…</span></div>';
-      this.wrap.appendChild(status);
-      this.syncPosition();
-    }
-
-    showError(message) {
-      this.clearStage();
-      const status = document.createElement('div');
-      status.className = 'status';
-      const card = document.createElement('div');
-      card.className = 'card';
-      card.textContent = message || '翻译失败，请稍后重试';
-      status.appendChild(card);
-      this.addToolbar(true);
-      this.wrap.appendChild(status);
-      this.syncPosition();
-      clearTimeout(this.errorTimer);
-      this.errorTimer = setTimeout(() => {
-        if (!this.destroyed) this.destroy();
-      }, 4000);
-    }
-
-    showBoxes(boxes, imageWidth, imageHeight) {
-      this.boxes = Array.isArray(boxes) ? boxes : [];
-      if (imageWidth) this.coordWidth = imageWidth;
-      if (imageHeight) this.coordHeight = imageHeight;
-      this.showingOriginal = false;
-      this.clearStage();
-      this.boxLayer = document.createElement('div');
-      this.wrap.appendChild(this.boxLayer);
-      this.addToolbar(false);
-      this.syncPosition();
-    }
-
-    addToolbar(errorMode) {
-      const toolbar = document.createElement('div');
-      toolbar.className = 'toolbar';
-      if (!errorMode) {
-        const toggle = document.createElement('button');
-        toggle.type = 'button';
-        toggle.textContent = '显示原文';
-        toggle.addEventListener('click', (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          this.showingOriginal = !this.showingOriginal;
-          this.wrap.classList.toggle('is-original', this.showingOriginal);
-          toggle.textContent = this.showingOriginal ? '显示译文' : '显示原文';
-        });
-        toolbar.appendChild(toggle);
-      }
-      const close = document.createElement('button');
-      close.type = 'button';
-      close.textContent = '关闭';
-      close.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        this.destroy();
-      });
-      toolbar.appendChild(close);
-      this.wrap.appendChild(toolbar);
-    }
-
-    layoutBoxes() {
-      if (!this.boxLayer || !this.mapping) return;
-      this.boxLayer.replaceChildren();
-      const map = this.mapping;
-      const coordW = this.coordWidth || map.nw;
-      const coordH = this.coordHeight || map.nh;
-      const scaleAdjustX = coordW ? map.nw / coordW : 1;
-      const scaleAdjustY = coordH ? map.nh / coordH : 1;
-
-      for (const item of this.boxes) {
-        const bbox = item.bbox;
-        if (!bbox) continue;
-        const x0 = bbox.x0 * scaleAdjustX;
-        const y0 = bbox.y0 * scaleAdjustY;
-        const x1 = bbox.x1 * scaleAdjustX;
-        const y1 = bbox.y1 * scaleAdjustY;
-        const left = (x0 - map.originX) * map.scaleX;
-        const top = (y0 - map.originY) * map.scaleY;
-        const width = Math.max(2, (x1 - x0) * map.scaleX);
-        const height = Math.max(2, (y1 - y0) * map.scaleY);
-        const el = document.createElement('div');
-        el.className = 'box';
-        el.style.left = `${left}px`;
-        el.style.top = `${top}px`;
-        el.style.width = `${width}px`;
-        el.style.height = `${height}px`;
-        const text = document.createElement('div');
-        text.className = 'text';
-        text.textContent = item.text || '';
-        el.appendChild(text);
-        this.boxLayer.appendChild(el);
-        fitText(text, width, height);
-      }
-    }
-
-    destroy() {
-      if (this.destroyed) return;
-      this.destroyed = true;
-      clearTimeout(this.errorTimer);
-      this.resizeObserver.disconnect();
-      window.removeEventListener('resize', this.onSync, true);
-      document.removeEventListener('scroll', this.onSync, true);
-      if (window.visualViewport) {
-        window.visualViewport.removeEventListener('resize', this.onSync);
-        window.visualViewport.removeEventListener('scroll', this.onSync);
-      }
-      this.host.remove();
-      activeOverlays.delete(this);
-      if (overlays.get(this.img) === this) overlays.delete(this.img);
-    }
-  }
-
-  function fitText(textEl, boxW, boxH) {
-    const maxH = Math.max(8, boxH - 2);
-    const maxW = Math.max(8, boxW - 4);
-    let lo = 6;
-    let hi = Math.min(64, Math.floor(maxH));
-    let best = 6;
-    while (lo <= hi) {
-      const mid = Math.floor((lo + hi) / 2);
-      textEl.style.fontSize = `${mid}px`;
-      if (textEl.scrollWidth <= maxW + 0.5 && textEl.scrollHeight <= maxH + 0.5) {
-        best = mid;
-        lo = mid + 1;
-      } else {
-        hi = mid - 1;
-      }
-    }
-    textEl.style.fontSize = `${best}px`;
-  }
-
-  const SNAPSHOT_MAX_AGE_MS = 60000;
-  const TOOLBAR_H = 32;
-  const SELECTION_CSS = `
-    :host { all: initial; }
-    .wrap {
-      position: relative;
-      width: 100%;
-      height: 100%;
-      pointer-events: none;
-      font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Heiti SC", sans-serif;
-    }
-    .status {
-      position: absolute;
-      inset: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 1;
-    }
-    .card {
-      pointer-events: auto;
-      background: rgba(32, 33, 36, 0.94);
-      color: #fff;
-      border-radius: 8px;
-      padding: 10px 16px;
-      font-size: 14px;
-      line-height: 1.4;
-      max-width: calc(100% - 16px);
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .spinner {
-      width: 14px;
-      height: 14px;
-      border: 2px solid rgba(255,255,255,0.35);
-      border-top-color: #fff;
-      border-radius: 50%;
-      animation: cit-spin 0.8s linear infinite;
-      flex: 0 0 auto;
-    }
-    @keyframes cit-spin { to { transform: rotate(360deg); } }
-    .region {
-      position: absolute;
-      box-sizing: border-box;
-      background: rgba(255, 255, 255, 0.94);
-      border-radius: 2px;
-      display: flex;
-      align-items: center;
-      justify-content: flex-start;
-      overflow: hidden;
-      padding: 1px 4px;
-      pointer-events: auto;
-    }
-    .region .text {
-      color: #202124;
-      text-align: left;
-      width: 100%;
-      overflow-wrap: anywhere;
-      word-break: break-word;
-      line-height: 1.25;
-      font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Heiti SC", sans-serif;
-    }
-    .wrap.is-original .region { visibility: hidden; }
-    .popup {
-      position: absolute;
-      left: 0;
-      top: 0;
-      width: 100%;
-      box-sizing: border-box;
-      pointer-events: auto;
+    .toolbar button:hover { background: #e8eaed; }
+    .popup.is-error .toolbar button,
+    .popup.is-loading .toolbar button {
       background: #fff;
       color: #202124;
-      border-radius: 8px;
-      padding: 12px 14px 12px;
-      box-shadow: 0 4px 18px rgba(0, 0, 0, 0.28);
-      max-width: 100%;
     }
-    .popup .body {
+    .body {
       font-size: 14px;
       line-height: 1.55;
       overflow-wrap: anywhere;
       word-break: break-word;
-      max-height: min(50vh, 360px);
       overflow: auto;
-      color: #202124;
+      padding: 8px 14px 14px;
+      color: inherit;
+      user-select: text;
+      cursor: text;
     }
-    .popup.is-error .body,
-    .popup.is-loading .body {
-      color: #fff;
+    .para {
+      margin: 0 0 0.9em;
     }
-    .popup.is-error,
-    .popup.is-loading {
-      background: rgba(32, 33, 36, 0.94);
-      color: #fff;
+    .para:last-child {
+      margin-bottom: 0;
+    }
+    .para.is-ocr {
+      margin-bottom: 0;
+    }
+    .para.is-heading {
+      font-weight: 600;
+      line-height: 1.4;
+    }
+    .para.is-bullet {
+      position: relative;
+      padding-left: calc(var(--cit-indent, 0px) + 1.25em);
+    }
+    .para.is-bullet::before {
+      content: "•";
+      position: absolute;
+      left: calc(var(--cit-indent, 0px) + 0.25em);
+      top: 0;
+      line-height: 1.55;
+    }
+    .line {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      min-height: 1.55em;
     }
     .popup.is-loading .body {
       display: flex;
@@ -760,45 +527,19 @@ function boot() {
       gap: 8px;
       max-height: none;
       overflow: visible;
+      cursor: default;
+      user-select: none;
     }
-    .toolbar {
-      position: absolute;
-      top: 0;
-      right: 0;
-      display: flex;
-      gap: 6px;
-      pointer-events: auto;
-      z-index: 2;
-      filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.28));
+    .spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255,255,255,0.35);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: cit-spin 0.8s linear infinite;
+      flex: 0 0 auto;
     }
-    .toolbar.toolbar-in-popup {
-      position: relative;
-      top: auto;
-      right: auto;
-      justify-content: flex-end;
-      margin: 0 0 8px;
-      filter: none;
-    }
-    .toolbar button {
-      appearance: none;
-      border: 0;
-      margin: 0;
-      cursor: pointer;
-      background: #fff;
-      color: #202124;
-      font-size: 12px;
-      line-height: 1;
-      padding: 6px 8px;
-      border-radius: 4px;
-      font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Heiti SC", sans-serif;
-    }
-    .toolbar button:hover { background: #f1f3f4; }
-    .popup.is-error .toolbar button,
-    .popup.is-loading .toolbar button {
-      background: #fff;
-      color: #202124;
-    }
-    .hidden { display: none !important; }
+    @keyframes cit-spin { to { transform: rotate(360deg); } }
   `;
 
   function isFormControl(el) {
@@ -879,18 +620,32 @@ function boot() {
 
   function getPlacementRects(snapshot) {
     if (!snapshot) return null;
+    let liveRects = null;
     if (snapshot.range && isRangeLive(snapshot.range)) {
       try {
         const rects = serializeRects(snapshot.range.getClientRects());
-        if (usableRects(rects)) return { rects, live: true };
+        if (usableRects(rects)) liveRects = rects;
       } catch (_err) {
         // Range may become unusable after DOM updates.
       }
     }
+    let frozen = null;
     if (snapshot.rects && snapshot.rects.length) {
       const adjusted = adjustRectsForScroll(snapshot.rects, snapshot.scrollX, snapshot.scrollY);
-      if (usableRects(adjusted)) return { rects: adjusted, live: false };
+      if (usableRects(adjusted)) frozen = adjusted;
     }
+    if (liveRects && frozen) {
+      const liveUnion = unionRect(liveRects);
+      const frozenUnion = unionRect(frozen);
+      const liveArea = liveUnion.width * liveUnion.height;
+      const frozenArea = frozenUnion.width * frozenUnion.height;
+      const liveGrew = frozenArea > 0 && liveArea > frozenArea * 2.2;
+      const jumpedTop = frozenUnion.top > 80 && liveUnion.top < 24 && liveUnion.height > frozenUnion.height * 1.6;
+      if (liveGrew || jumpedTop) return { rects: frozen, live: false };
+      return { rects: liveRects, live: true };
+    }
+    if (liveRects) return { rects: liveRects, live: true };
+    if (frozen) return { rects: frozen, live: false };
     return null;
   }
 
@@ -967,12 +722,524 @@ function boot() {
     return candidates;
   }
 
+
+  const EXPLICIT_BLOCK_TAGS = new Set([
+    'P', 'DIV', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
+    'BLOCKQUOTE', 'PRE', 'TD', 'TH', 'TR', 'DT', 'DD',
+    'ARTICLE', 'SECTION', 'HEADER', 'FOOTER', 'MAIN', 'ASIDE',
+    'ADDRESS', 'FIGCAPTION', 'CENTER'
+  ]);
+  const PARA_BREAK_TAGS = new Set([
+    'P', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
+    'BLOCKQUOTE', 'TR', 'PRE', 'DT', 'DD', 'ADDRESS', 'FIGCAPTION'
+  ]);
+
+  function isSkippableElement(el) {
+    if (!el || el.nodeType !== 1) return false;
+    const tag = el.tagName;
+    return tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT';
+  }
+
+  function isBlockLike(el) {
+    if (!el || el.nodeType !== 1) return false;
+    const tag = el.tagName;
+    if (tag === 'BR' || isSkippableElement(el)) return false;
+    if (EXPLICIT_BLOCK_TAGS.has(tag)) return true;
+    try {
+      const display = getComputedStyle(el).display;
+      return display === 'block' || display === 'list-item' || display === 'table'
+        || display === 'table-row' || display === 'table-cell' || display === 'flex'
+        || display === 'grid' || display === 'table-caption';
+    } catch (_err) {
+      return false;
+    }
+  }
+
+  function isVisuallyHidden(node) {
+    let el = node && (node.nodeType === 1 ? node : node.parentElement);
+    while (el && el !== document.documentElement && el !== document.body) {
+      if (el.hidden || el.nodeName === 'NOSCRIPT') return true;
+      try {
+        if (el.getAttribute && el.getAttribute('aria-hidden') === 'true') return true;
+        const style = getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) === 0) {
+          return true;
+        }
+        const rect = el.getBoundingClientRect();
+        if ((style.overflow === 'hidden' || style.clip !== 'auto') && rect.width <= 1 && rect.height <= 1) {
+          return true;
+        }
+        if ((style.position === 'absolute' || style.position === 'fixed')
+            && (rect.bottom < -8 || rect.right < -8 || rect.left > (window.innerWidth || 0) + 8 || rect.top > (window.innerHeight || 0) + 8)
+            && (parseInt(style.left, 10) < -80 || parseInt(style.top, 10) < -80 || parseInt(style.textIndent, 10) < -80)) {
+          return true;
+        }
+      } catch (_err) {}
+      el = el.parentElement;
+    }
+    return false;
+  }
+
+  function fontSizeOf(node) {
+    const el = node && (node.nodeType === 1 ? node : node.parentElement);
+    if (!el) return 16;
+    try {
+      const size = parseFloat(getComputedStyle(el).fontSize);
+      return Number.isFinite(size) && size > 0 ? size : 16;
+    } catch (_err) {
+      return 16;
+    }
+  }
+
+  function pushGlyph(list, text, rect) {
+    if (!text || !rect) return;
+    if (!(rect.width >= 0.5 && rect.height >= 0.5)) return;
+    list.push({
+      text: String(text),
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+      right: rect.right,
+      bottom: rect.bottom
+    });
+  }
+
+  function collectGlyphsFromTextNode(node, start, end, list) {
+    const value = node.nodeValue || '';
+    const from = Math.max(0, start);
+    const to = Math.min(value.length, end);
+    if (to <= from) return;
+    const range = document.createRange();
+    // Fast path: the whole slice sits on one line.
+    try {
+      range.setStart(node, from);
+      range.setEnd(node, to);
+      const rects = serializeRects(range.getClientRects());
+      const tooTall = rects.length === 1 && rects[0].height > fontSizeOf(node) * 1.7;
+      if (rects.length <= 1 && !tooTall) {
+        if (rects[0]) pushGlyph(list, value.slice(from, to), rects[0]);
+        return;
+      }
+    } catch (_err) {
+      return;
+    }
+    let cursor = from;
+    while (cursor < to) {
+      const cp = value.codePointAt(cursor);
+      const len = cp > 0xffff ? 2 : 1;
+      try {
+        range.setStart(node, cursor);
+        range.setEnd(node, cursor + len);
+        const rects = serializeRects(range.getClientRects());
+        if (rects[0]) pushGlyph(list, value.slice(cursor, cursor + len), rects[0]);
+      } catch (_err) {}
+      cursor += len;
+    }
+  }
+
+  function collectGlyphsFromRange(range) {
+    if (!range || range.collapsed) return [];
+    const glyphs = [];
+    const root = range.commonAncestorContainer;
+    const walkerRoot = root.nodeType === 1 ? root : (root.parentNode || document.body);
+    const walker = document.createTreeWalker(
+      walkerRoot,
+      NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+      {
+        acceptNode(node) {
+          if (node.nodeType === 1) {
+            if (isSkippableElement(node)) return NodeFilter.FILTER_REJECT;
+            if (isVisuallyHidden(node)) return NodeFilter.FILTER_REJECT;
+            const tag = node.tagName;
+            if (tag === 'IMG' || tag === 'IMAGE' || tag === 'BR') {
+              return rangeIntersects(range, node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+            }
+            return NodeFilter.FILTER_SKIP;
+          }
+          if (!node.nodeValue) return NodeFilter.FILTER_REJECT;
+          if (isVisuallyHidden(node)) return NodeFilter.FILTER_REJECT;
+          return rangeIntersects(range, node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+        }
+      }
+    );
+    let node;
+    while ((node = walker.nextNode())) {
+      if (node.nodeType === 3) {
+        let start = 0;
+        let end = (node.nodeValue || '').length;
+        if (node === range.startContainer) start = range.startOffset;
+        if (node === range.endContainer) end = range.endOffset;
+        collectGlyphsFromTextNode(node, start, end, glyphs);
+        continue;
+      }
+      if (node.tagName === 'IMG' || node.tagName === 'IMAGE') {
+        const alt = (node.getAttribute && (node.getAttribute('alt') || '')) || '';
+        if (!alt) continue;
+        try {
+          pushGlyph(glyphs, alt, node.getBoundingClientRect());
+        } catch (_err) {}
+      }
+    }
+    return glyphs;
+  }
+
+  function groupRectsIntoLineBoxes(rects) {
+    const items = (rects || []).filter((r) => r && r.width >= 1 && r.height >= 1)
+      .slice()
+      .sort((a, b) => a.top - b.top || a.left - b.left);
+    const lines = [];
+    for (const r of items) {
+      const mid = (r.top + r.bottom) / 2;
+      let found = null;
+      for (let i = lines.length - 1; i >= 0; i -= 1) {
+        const line = lines[i];
+        const overlap = Math.min(line.bottom, r.bottom) - Math.max(line.top, r.top);
+        const lineH = Math.max(1, line.bottom - line.top);
+        if ((mid >= line.top && mid <= line.bottom) || overlap > Math.min(r.height, lineH) * 0.4) {
+          found = line;
+          break;
+        }
+      }
+      if (found) {
+        found.top = Math.min(found.top, r.top);
+        found.bottom = Math.max(found.bottom, r.bottom);
+        found.left = Math.min(found.left, r.left);
+        found.right = Math.max(found.right, r.right);
+      } else {
+        lines.push({
+          top: r.top,
+          bottom: r.bottom,
+          left: r.left,
+          right: r.right
+        });
+      }
+    }
+    lines.sort((a, b) => a.top - b.top || a.left - b.left);
+    return lines;
+  }
+
+  function caretRangeAt(x, y) {
+    try {
+      if (typeof document.caretRangeFromPoint === 'function') {
+        return document.caretRangeFromPoint(x, y);
+      }
+    } catch (_err) {}
+    try {
+      if (typeof document.caretPositionFromPoint === 'function') {
+        const pos = document.caretPositionFromPoint(x, y);
+        if (!pos || !pos.offsetNode) return null;
+        const range = document.createRange();
+        range.setStart(pos.offsetNode, pos.offset);
+        range.collapse(true);
+        return range;
+      }
+    } catch (_err) {}
+    return null;
+  }
+
+  function textFromLineBox(selRange, box) {
+    const midY = box.top + Math.max(2, (box.bottom - box.top) * 0.5);
+    const start = caretRangeAt(box.left + 1, midY);
+    const end = caretRangeAt(Math.max(box.left + 1, box.right - 1), midY);
+    if (!start || !end) return '';
+    try {
+      const lineRange = document.createRange();
+      lineRange.setStart(start.startContainer, start.startOffset);
+      lineRange.setEnd(end.startContainer, end.endOffset);
+      if (selRange) {
+        if (selRange.compareBoundaryPoints(Range.START_TO_START, lineRange) > 0) {
+          lineRange.setStart(selRange.startContainer, selRange.startOffset);
+        }
+        if (selRange.compareBoundaryPoints(Range.END_TO_END, lineRange) < 0) {
+          lineRange.setEnd(selRange.endContainer, selRange.endOffset);
+        }
+      }
+      return String(lineRange.toString() || '').replace(/[ \t]+/g, ' ').replace(/\u00a0/g, ' ').trim();
+    } catch (_err) {
+      return '';
+    }
+  }
+
+  function assignGlyphsToLineBoxes(boxes, glyphs) {
+    return (boxes || []).map((box) => {
+      const hits = [];
+      for (const g of glyphs || []) {
+        const mid = (g.top + g.bottom) / 2;
+        if (mid >= box.top - 1 && mid <= box.bottom + 1) hits.push(g);
+      }
+      hits.sort((a, b) => a.left - b.left || a.top - b.top);
+      const text = hits.map((g) => (g && g.text) || '').join('').replace(/[ \t]+/g, ' ').replace(/\u00a0/g, ' ').trim();
+      return { box, text };
+    });
+  }
+
+  function blocksFromLineItems(items) {
+    const lines = (items || []).filter((item) => item && item.box);
+    if (!lines.length) return [];
+    const heights = lines
+      .map((item) => Math.max(0, item.box.bottom - item.box.top))
+      .filter((height) => height > 0)
+      .sort((a, b) => a - b);
+    const medH = heights.length ? heights[Math.floor(heights.length / 2)] : 16;
+    const paraGap = Math.max(medH * 0.8, 8);
+    const box = CITLayout.unionRect(lines.map((item) => item.box));
+    const blocks = [];
+    let current = [];
+    let lastBottom = null;
+    const flush = () => {
+      const kept = [];
+      const rects = [];
+      for (const item of current) {
+        const text = (item.text || '').trim();
+        if (!text) continue;
+        kept.push(text);
+        rects.push(item.box);
+      }
+      current = [];
+      if (!kept.length) return;
+      blocks.push({
+        align: CITLayout.inferAlignFromRects(rects, box) || 'left',
+        lines: kept
+      });
+    };
+    for (const item of lines) {
+      if (lastBottom != null && (item.box.top - lastBottom) > paraGap) flush();
+      current.push(item);
+      lastBottom = item.box.bottom;
+    }
+    flush();
+    return blocks;
+  }
+
+  function countBlockStructure(blocks) {
+    if (!blocks || !blocks.length) return 0;
+    return CITLayout.linesFromBlocks(blocks).length + Math.max(0, blocks.length - 1) * 2;
+  }
+
+  function extractBlocksFromLineBoxes(range, glyphs) {
+    if (!range || range.collapsed) return [];
+    const boxes = groupRectsIntoLineBoxes(serializeRects(range.getClientRects()));
+    if (boxes.length < 2) return [];
+    const assigned = assignGlyphsToLineBoxes(boxes, glyphs);
+    for (const item of assigned) {
+      if (!item.text) item.text = textFromLineBox(range, item.box);
+    }
+    return blocksFromLineItems(assigned);
+  }
+
+  function extractVisualBlocksFromRange(range) {
+    const glyphs = collectGlyphsFromRange(range);
+    let fromGlyphs = [];
+    if (glyphs.length) {
+      fromGlyphs = CITLayout.groupGlyphsIntoBlocks(glyphs, CITLayout.unionRect(glyphs));
+    }
+    let fromBoxes = [];
+    try {
+      fromBoxes = extractBlocksFromLineBoxes(range, glyphs);
+    } catch (_err) {
+      fromBoxes = [];
+    }
+    if (countBlockStructure(fromBoxes) > countBlockStructure(fromGlyphs)) return fromBoxes;
+    return fromGlyphs;
+  }
+
+  function nearestBlock(node) {
+    let el = node && (node.nodeType === 1 ? node : node.parentElement);
+    while (el) {
+      if (isBlockLike(el)) return el;
+      el = el.parentElement;
+    }
+    return document.body || document.documentElement;
+  }
+
+  function isParagraphBoundary(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (PARA_BREAK_TAGS.has(el.tagName)) return true;
+    try {
+      const style = getComputedStyle(el);
+      const mt = parseFloat(style.marginTop) || 0;
+      const pt = parseFloat(style.paddingTop) || 0;
+      if (mt + pt >= 8) return true;
+    } catch (_err) {}
+    return false;
+  }
+
+  function isBlockVisuallyEmpty(el) {
+    if (!el) return false;
+    const text = String(el.innerText || el.textContent || '').replace(/\u00a0/g, ' ').trim();
+    return !text;
+  }
+
+  function readBlockAlign(el) {
+    if (!el) return 'left';
+    try {
+      const style = getComputedStyle(el);
+      const css = CITLayout.normalizeAlign(style.textAlign, style.direction);
+      const attr = el.getAttribute && el.getAttribute('align');
+      const fromAttr = attr ? CITLayout.normalizeAlign(attr, style.direction) : 'left';
+      if (css !== 'left') return css;
+      if (fromAttr !== 'left') return fromAttr;
+      const box = el.getBoundingClientRect();
+      const padL = parseFloat(style.paddingLeft) || 0;
+      const padR = parseFloat(style.paddingRight) || 0;
+      const content = {
+        left: box.left + padL,
+        right: box.right - padR,
+        width: Math.max(0, box.width - padL - padR)
+      };
+      const probe = document.createRange();
+      probe.selectNodeContents(el);
+      const lineRects = serializeRects(probe.getClientRects());
+      return CITLayout.inferAlignFromRects(lineRects, content) || 'left';
+    } catch (_err) {
+      return 'left';
+    }
+  }
+
+  function sliceTextInRange(node, range) {
+    let text = node.nodeValue || '';
+    if (node === range.startContainer && node === range.endContainer) {
+      text = text.slice(range.startOffset, range.endOffset);
+    } else if (node === range.startContainer) {
+      text = text.slice(range.startOffset);
+    } else if (node === range.endContainer) {
+      text = text.slice(0, range.endOffset);
+    }
+    return text.replace(/\u00a0/g, ' ');
+  }
+
+  function rangeIntersects(range, node) {
+    try {
+      return range.intersectsNode(node);
+    } catch (_err) {
+      return false;
+    }
+  }
+
+  function extractBlocksFromRange(range) {
+    if (!range || range.collapsed) return [];
+    const root = range.commonAncestorContainer;
+    const walkerRoot = root.nodeType === 1 ? root : (root.parentNode || document.body);
+    const events = [];
+    let currentText = '';
+    let currentAlign = 'left';
+    let currentBlock = null;
+    let paraBefore = false;
+
+    function flushLine() {
+      const line = currentText.replace(/[ \t]+/g, ' ').trim();
+      currentText = '';
+      if (!line) return false;
+      events.push({ type: 'line', text: line, align: currentAlign, paraBefore });
+      paraBefore = false;
+      return true;
+    }
+
+    function enterBlock(block, forcePara) {
+      if (!block || block === currentBlock) return;
+      flushLine();
+      if (currentBlock && (forcePara || isParagraphBoundary(block) || isParagraphBoundary(currentBlock))) {
+        paraBefore = true;
+      }
+      currentBlock = block;
+      currentAlign = readBlockAlign(block);
+    }
+
+    const walker = document.createTreeWalker(
+      walkerRoot,
+      NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+      {
+        acceptNode(node) {
+          if (node.nodeType === 1) {
+            if (isSkippableElement(node)) return NodeFilter.FILTER_REJECT;
+            if (node.tagName === 'BR' || isBlockLike(node)) {
+              return rangeIntersects(range, node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+            }
+            return NodeFilter.FILTER_SKIP;
+          }
+          if (!node.nodeValue) return NodeFilter.FILTER_REJECT;
+          return rangeIntersects(range, node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+        }
+      }
+    );
+
+    let node;
+    while ((node = walker.nextNode())) {
+      if (node.nodeType === 3) {
+        enterBlock(nearestBlock(node), false);
+        currentText += sliceTextInRange(node, range);
+        if (currentText.includes('\n')) {
+          const parts = currentText.split('\n');
+          currentText = '';
+          for (let i = 0; i < parts.length; i += 1) {
+            if (i === parts.length - 1) {
+              currentText = parts[i];
+            } else {
+              currentText = parts[i];
+              const had = flushLine();
+              if (!had) paraBefore = true;
+            }
+          }
+        }
+        continue;
+      }
+      if (node.tagName === 'BR') {
+        enterBlock(nearestBlock(node), false);
+        const had = flushLine();
+        if (!had || isBlockVisuallyEmpty(nearestBlock(node))) {
+          paraBefore = true;
+        }
+        continue;
+      }
+      if (isBlockLike(node)) {
+        enterBlock(node, isParagraphBoundary(node));
+        if (isBlockVisuallyEmpty(node)) {
+          flushLine();
+          paraBefore = true;
+        }
+      }
+    }
+    flushLine();
+
+    const blocks = [];
+    let lines = [];
+    let align = 'left';
+    const pushPara = () => {
+      while (lines.length && lines[0] === '') lines.shift();
+      while (lines.length && lines[lines.length - 1] === '') lines.pop();
+      if (lines.length) {
+        blocks.push({ align, lines: lines.slice() });
+        lines = [];
+      }
+    };
+    for (const event of events) {
+      if (event.paraBefore) pushPara();
+      if (lines.length && event.align !== align) pushPara();
+      align = event.align || 'left';
+      lines.push(event.text);
+    }
+    pushPara();
+    return blocks;
+  }
+
+  function readFormAlign(form) {
+    try {
+      const style = getComputedStyle(form);
+      return CITLayout.normalizeAlign(style.textAlign, style.direction);
+    } catch (_err) {
+      return 'left';
+    }
+  }
+
   function captureSelectionSnapshot(event) {
-    const mouse = { x: event.clientX, y: event.clientY };
+    const mouse = event && Number.isFinite(event.clientX) && Number.isFinite(event.clientY)
+      ? { x: event.clientX, y: event.clientY }
+      : lastPointerMouse();
     const scrollX = window.scrollX || window.pageXOffset || 0;
     const scrollY = window.scrollY || window.pageYOffset || 0;
     const time = Date.now();
-    const form = findFormControlInPath(event);
+    const form = event ? findFormControlInPath(event) : (isFormControl(document.activeElement) ? document.activeElement : null);
 
     if (form) {
       let text = '';
@@ -983,14 +1250,17 @@ function boot() {
       } catch (_err) {
         // Some input types throw when reading selectionStart.
       }
+      const align = readFormAlign(form);
       return {
         text,
         inFormControl: true,
+        formEl: form,
         mouse,
         scrollX,
         scrollY,
         rects: [],
         range: null,
+        blocks: CITLayout.blocksFromPlainText(text, align),
         time
       };
     }
@@ -1002,14 +1272,34 @@ function boot() {
       rects: []
     };
 
+    let blocks = [];
+    if (best.range) {
+      try {
+        blocks = extractVisualBlocksFromRange(best.range);
+      } catch (_err) {
+        blocks = [];
+      }
+      if (!blocks.length) {
+        try {
+          blocks = extractBlocksFromRange(best.range);
+        } catch (_err) {
+          blocks = [];
+        }
+      }
+    }
+    if (!blocks.length && (best.text || '').trim()) {
+      blocks = CITLayout.blocksFromPlainText(best.text, 'left');
+    }
+
     return {
-      text: best.text || '',
+      text: blocks.length ? CITLayout.blocksToSourceText(blocks) : (best.text || ''),
       inFormControl: false,
       mouse,
       scrollX,
       scrollY,
       rects: best.rects || [],
       range: best.range || null,
+      blocks,
       time
     };
   }
@@ -1024,63 +1314,197 @@ function boot() {
     return String(fallbackText || '');
   }
 
-  function choosePlacement(snapshot) {
-    const fallbackAnchor = (snapshot && snapshot.mouse)
-      || { x: Math.round(window.innerWidth / 2), y: 24 };
-    if (!snapshot || snapshot.inFormControl) {
-      return { mode: 'popup', anchor: fallbackAnchor };
+  function chooseAnchor(snapshot) {
+    const mouse = (snapshot && snapshot.mouse && Number.isFinite(snapshot.mouse.x))
+      ? snapshot.mouse
+      : lastPointerMouse();
+    const placed = snapshot ? getPlacementRects(snapshot) : null;
+    const rawRects = (placed && placed.rects && placed.rects.length)
+      ? placed.rects
+      : ((snapshot && snapshot.rects) || []);
+    const clustered = CITLayout.clusterRects(rawRects, mouse, 96, 80);
+    let sourceRect = clustered.length ? (CITLayout.unionRect(clustered) || unionRect(clustered)) : null;
+    if (sourceRect && mouse && sourceRect.height > 220) {
+      const near = clustered.filter((r) => {
+        const top = r.top;
+        const bottom = r.bottom != null ? r.bottom : r.top + r.height;
+        return top <= mouse.y + 120 && bottom >= mouse.y - 120;
+      });
+      const local = near.length ? (CITLayout.unionRect(near) || unionRect(near)) : null;
+      if (local && local.height >= 8) sourceRect = local;
     }
-    const placed = getPlacementRects(snapshot);
-    if (placed && placed.rects.length) {
-      return { mode: 'overlay', rects: placed.rects, live: placed.live };
+    return { mouse, sourceRect, prefer: 'below' };
+  }
+
+  function anchorFromImage(img, layout) {
+    if (!isElementCurrent(img)) {
+      return { prefer: 'right' };
     }
-    if (snapshot.rects && snapshot.rects[0]) {
-      const r = snapshot.rects[0];
-      return { mode: 'popup', anchor: { x: r.left, y: r.bottom } };
+    const r = img.getBoundingClientRect();
+    const anchor = { sourceRect: r, prefer: 'right' };
+    if (!layout || !layout.column || !(layout.imageWidth > 0)) return anchor;
+    try {
+      const m = getImageMapping(img);
+      if (!(m.cssWidth > 1 && m.cssHeight > 1)) return anchor;
+      const ratioX = (m.nw || layout.imageWidth) / layout.imageWidth;
+      const ratioY = layout.imageHeight > 0 ? (m.nh || layout.imageHeight) / layout.imageHeight : ratioX;
+      const imageRect = {
+        left: m.cssLeft,
+        top: m.cssTop,
+        width: m.cssWidth,
+        height: m.cssHeight,
+        right: m.cssLeft + m.cssWidth,
+        bottom: m.cssTop + m.cssHeight
+      };
+      const toScreen = (b) => {
+        const left = m.cssLeft + (b.x0 * ratioX - m.originX) * m.scaleX;
+        const top = m.cssTop + (b.y0 * ratioY - m.originY) * m.scaleY;
+        const right = m.cssLeft + (b.x1 * ratioX - m.originX) * m.scaleX;
+        const bottom = m.cssTop + (b.y1 * ratioY - m.originY) * m.scaleY;
+        return CITLayout.intersectRect({
+          left,
+          top,
+          width: Math.max(0, right - left),
+          height: Math.max(0, bottom - top)
+        }, imageRect);
+      };
+      const columnRect = toScreen(layout.column);
+      if (!columnRect) return anchor;
+      anchor.imageRect = imageRect;
+      anchor.columnRect = columnRect;
+      anchor.textRects = (layout.textRects || []).map(toScreen).filter(Boolean);
+      // Panel = text column width plus the panel's own padding/border.
+      anchor.preferWidth = Math.round(columnRect.width + 30);
+    } catch (_err) {}
+    return anchor;
+  }
+
+  function selectionAnchorElement(snapshot) {
+    if (!snapshot) return null;
+    if (snapshot.formEl && snapshot.formEl.isConnected) return snapshot.formEl;
+    let node = null;
+    try {
+      node = snapshot.range && snapshot.range.startContainer;
+    } catch (_err) {
+      node = null;
     }
-    return { mode: 'popup', anchor: fallbackAnchor };
+    let el = node && (node.nodeType === 1 ? node : node.parentElement);
+    for (let i = 0; el && i < 6; i += 1) {
+      try {
+        if (el.isConnected) {
+          const r = el.getBoundingClientRect();
+          if (r.width >= 1 && r.height >= 1) return el;
+        }
+      } catch (_err) {}
+      el = el.parentElement;
+    }
+    return null;
   }
 
   function handlePrepareSelection(message) {
-    const snapshot = isSnapshotFresh(lastSelectionSnapshot) ? lastSelectionSnapshot : null;
+    let snapshot = isSnapshotFresh(lastSelectionSnapshot) ? lastSelectionSnapshot : null;
+    if (!(snapshot && String(snapshot.text || '').trim()) && isSnapshotFresh(lastGoodSelectionSnapshot)) {
+      snapshot = Object.assign({}, lastGoodSelectionSnapshot, {
+        mouse: (snapshot && snapshot.mouse) || lastPointerMouse() || lastGoodSelectionSnapshot.mouse,
+        time: Date.now()
+      });
+    }
+    try {
+      const live = captureSelectionSnapshot(null);
+      if (live && String(live.text || '').trim()) {
+        const liveBetter = countBlockStructure(live.blocks) > countBlockStructure(snapshot && snapshot.blocks);
+        if (!snapshot || !String(snapshot.text || '').trim() || liveBetter) {
+          snapshot = Object.assign({}, live, {
+            mouse: (snapshot && snapshot.mouse) || lastPointerMouse() || live.mouse
+          });
+        } else if (snapshot && !(snapshot.rects && snapshot.rects.length) && live.rects && live.rects.length) {
+          snapshot = Object.assign({}, snapshot, {
+            rects: live.rects,
+            range: live.range || snapshot.range,
+            scrollX: live.scrollX,
+            scrollY: live.scrollY
+          });
+        }
+      }
+    } catch (_err) {}
     const text = pickSelectionText(snapshot, message.fallbackText);
     if (!text.trim()) {
       return { ok: false, error: '没有可翻译的文字' };
     }
     if (currentSelectionView) currentSelectionView.destroy();
-    const placement = choosePlacement(snapshot);
-    const view = new SelectionView(message.requestId, snapshot, placement, text);
+    const view = new FloatPanel(message.requestId, () => chooseAnchor(snapshot), {
+      anchorEl: selectionAnchorElement(snapshot)
+    });
     currentSelectionView = view;
     activeOverlays.add(view);
     view.showLoading();
-    return { ok: true, text, mode: placement.mode };
+    const blocks = (snapshot && snapshot.blocks && snapshot.blocks.length)
+      ? snapshot.blocks
+      : CITLayout.blocksFromPlainText(text, 'left');
+    return { ok: true, text: CITLayout.blocksToSourceText(blocks) || text, blocks };
   }
 
-  class SelectionView {
-    constructor(requestId, snapshot, placement, sourceText) {
+  function currentRouteKey() {
+    try {
+      const u = new URL(location.href);
+      const h = u.hash || '';
+      const hashRoute = (h.startsWith('#/') || h.startsWith('#!')) ? h : '';
+      return u.origin + u.pathname + u.search + hashRoute;
+    } catch (_err) {
+      return String(location.href || '');
+    }
+  }
+
+  function destroyAllPanels() {
+    for (const overlay of [...activeOverlays]) {
+      try {
+        overlay.destroy();
+      } catch (_err) {}
+    }
+    try {
+      document.querySelectorAll('[data-cit-float]').forEach((node) => node.remove());
+    } catch (_err) {}
+  }
+
+  // Close the floating window on refresh / close / back-forward cache, SPA
+  // navigation, and Escape.
+  window.addEventListener('pagehide', destroyAllPanels, true);
+  window.addEventListener('beforeunload', destroyAllPanels, true);
+  window.addEventListener('pageshow', (event) => {
+    if (event && event.persisted) destroyAllPanels();
+  }, true);
+  const onRouteMaybeChanged = () => {
+    for (const overlay of [...activeOverlays]) overlay.checkAlive();
+  };
+  window.addEventListener('popstate', onRouteMaybeChanged, true);
+  window.addEventListener('hashchange', onRouteMaybeChanged, true);
+  window.addEventListener('keydown', (event) => {
+    if (!event || event.key !== 'Escape' || event.isComposing) return;
+    if (activeOverlays.size) destroyAllPanels();
+  }, true);
+
+  class FloatPanel {
+    constructor(requestId, getAnchor, options) {
       this.requestId = requestId;
-      this.snapshot = snapshot || {
-        mouse: placement.anchor || { x: 24, y: 24 },
-        scrollX: window.scrollX || 0,
-        scrollY: window.scrollY || 0,
-        rects: [],
-        range: null,
-        inFormControl: true,
-        time: Date.now()
-      };
-      this.mode = placement.mode;
-      this.anchor = placement.anchor || this.snapshot.mouse || { x: 24, y: 24 };
-      this.sourceText = sourceText || '';
-      this.translatedText = '';
-      this.showingOriginal = false;
+      this.getAnchor = typeof getAnchor === 'function' ? getAnchor : () => ({ x: 24, y: 24 });
+      this.img = options && options.img ? options.img : null;
+      this.anchorEl = options && options.anchorEl ? options.anchorEl : this.img;
       this.destroyed = false;
       this.errorTimer = 0;
+      this.userMoved = false;
+      this.dragging = false;
       this.phase = 'loading';
-      this.lastError = '';
-      this._switchingToPopup = false;
+      this.ocrLayout = null;
+      // Panel position relative to the anchor's reference point, so the panel
+      // moves with page content (window scroll and nested scroll containers).
+      this.offset = null;
+      this.lastRef = null;
+      this.pos = null;
+      this.missingTicks = 0;
+      this.routeKey = currentRouteKey();
 
       this.host = document.createElement('div');
-      this.host.setAttribute('data-cit-selection', '1');
+      this.host.setAttribute('data-cit-float', '1');
       this.host.style.cssText = [
         'all: initial',
         'display: block',
@@ -1088,7 +1512,7 @@ function boot() {
         'left: 0',
         'top: 0',
         'width: 0',
-        'height: 0',
+        'height: auto',
         'overflow: visible',
         'z-index: 2147483647',
         'pointer-events: none',
@@ -1100,157 +1524,127 @@ function boot() {
 
       this.shadow = this.host.attachShadow({ mode: 'open' });
       const style = document.createElement('style');
-      style.textContent = SELECTION_CSS;
+      style.textContent = FLOAT_CSS;
       this.wrap = document.createElement('div');
-      this.wrap.className = 'wrap';
       this.shadow.append(style, this.wrap);
       (document.documentElement || document.body).appendChild(this.host);
 
-      this.onSync = () => this.syncPosition();
-      this.resizeObserver = new ResizeObserver(this.onSync);
-      this.observeRangeAncestor();
-      window.addEventListener('resize', this.onSync, true);
-      document.addEventListener('scroll', this.onSync, true);
+      this.onResize = () => this.handleResize();
+      this.onScroll = () => this.follow();
+      window.addEventListener('resize', this.onResize, true);
+      document.addEventListener('scroll', this.onScroll, true);
       if (window.visualViewport) {
-        window.visualViewport.addEventListener('resize', this.onSync);
-        window.visualViewport.addEventListener('scroll', this.onSync);
+        window.visualViewport.addEventListener('resize', this.onResize);
+        window.visualViewport.addEventListener('scroll', this.onScroll);
       }
-    }
-
-    switchToPopup(anchor) {
-      const r = this.snapshot && this.snapshot.rects && this.snapshot.rects[0];
-      this.mode = 'popup';
-      this.anchor = anchor || this.anchor || this.snapshot.mouse || (r ? { x: r.left, y: r.bottom } : { x: 24, y: 24 });
-      if (this._switchingToPopup) {
-        this.layoutPopup();
-        return;
-      }
-      this._switchingToPopup = true;
-      try {
-        if (this.phase === 'error') {
-          this.showError(this.lastError || '翻译失败，请稍后重试');
-        } else if (this.phase === 'result') {
-          this.showSelectionResult(this.sourceText, this.translatedText);
-        } else {
-          this.showLoading();
-        }
-      } finally {
-        this._switchingToPopup = false;
-      }
-    }
-
-    observeRangeAncestor() {
-      try {
-        const range = this.snapshot && this.snapshot.range;
-        if (!range) return;
-        const node = range.commonAncestorContainer;
-        const el = node && (node.nodeType === 1 ? node : node.parentElement);
-        if (el) this.resizeObserver.observe(el);
-      } catch (_err) {
-        // ignore
-      }
-    }
-
-    syncPosition() {
-      if (this.destroyed) return;
-      if (this.mode === 'overlay') {
-        const placed = getPlacementRects(this.snapshot);
-        if (!placed || !placed.rects.length) {
-          const r = this.snapshot.rects && this.snapshot.rects[0];
-          this.switchToPopup(this.snapshot.mouse || (r ? { x: r.left, y: r.bottom } : { x: 24, y: 24 }));
-          return;
-        }
-        this.layoutOverlay(placed.rects);
-        return;
-      }
-      this.layoutPopup();
+      this.tick = () => {
+        if (this.destroyed) return;
+        this.follow();
+        this.rafId = requestAnimationFrame(this.tick);
+      };
+      this.rafId = requestAnimationFrame(this.tick);
+      this.aliveTimer = setInterval(() => this.checkAlive(), 400);
     }
 
     clearStage() {
       this.wrap.replaceChildren();
-      this.wrap.classList.remove('is-original');
-      this.region = null;
+      this.popup = null;
       this.bodyEl = null;
+      this.toolbar = null;
     }
 
     showLoading() {
       this.phase = 'loading';
+      clearTimeout(this.errorTimer);
       this.clearStage();
-      if (this.mode === 'overlay') {
-        const status = document.createElement('div');
-        status.className = 'status';
-        status.innerHTML = '<div class="card"><span class="spinner"></span><span>翻译中…</span></div>';
-        this.wrap.appendChild(status);
-      } else {
-        this.buildPopupChrome('loading');
-        const body = document.createElement('div');
-        body.className = 'body';
-        body.innerHTML = '<span class="spinner"></span><span>翻译中…</span>';
-        this.popup.appendChild(body);
-        this.bodyEl = body;
-      }
-      this.syncPosition();
+      this.buildPopup('loading');
+      const body = document.createElement('div');
+      body.className = 'body';
+      const spinner = document.createElement('span');
+      spinner.className = 'spinner';
+      const label = document.createElement('span');
+      label.textContent = '翻译中…';
+      body.append(spinner, label);
+      this.popup.appendChild(body);
+      this.bodyEl = body;
+      this.place();
     }
 
     showError(message) {
       this.phase = 'error';
-      this.lastError = message || '翻译失败，请稍后重试';
       this.clearStage();
-      const text = this.lastError;
-      if (this.mode === 'overlay') {
-        const status = document.createElement('div');
-        status.className = 'status';
-        const card = document.createElement('div');
-        card.className = 'card';
-        card.textContent = text;
-        status.appendChild(card);
-        this.addToolbar(true);
-        this.wrap.appendChild(status);
-      } else {
-        this.buildPopupChrome('error');
-        this.addToolbar(true, true);
-        const body = document.createElement('div');
-        body.className = 'body';
-        body.textContent = text;
-        this.popup.appendChild(body);
-        this.bodyEl = body;
-      }
-      this.syncPosition();
+      this.buildPopup('error');
+      this.addToolbar();
+      const body = document.createElement('div');
+      body.className = 'body';
+      body.textContent = message || '翻译失败，请稍后重试';
+      this.popup.appendChild(body);
+      this.bodyEl = body;
+      this.place();
       clearTimeout(this.errorTimer);
       this.errorTimer = setTimeout(() => {
         if (!this.destroyed) this.destroy();
       }, 4000);
     }
 
-    showSelectionResult(source, translated) {
-      this.sourceText = source || this.sourceText || '';
-      this.translatedText = translated || '';
-      this.showingOriginal = false;
+    showResult(text, blocks) {
       this.phase = 'result';
+      clearTimeout(this.errorTimer);
       this.clearStage();
-      if (this.mode === 'overlay') {
-        this.region = document.createElement('div');
-        this.region.className = 'region';
-        const text = document.createElement('div');
-        text.className = 'text';
-        text.textContent = this.translatedText;
-        this.region.appendChild(text);
-        this.textEl = text;
-        this.wrap.appendChild(this.region);
-        this.addToolbar(false);
+      this.buildPopup('result');
+      this.addToolbar();
+      const body = document.createElement('div');
+      body.className = 'body';
+      const paras = (blocks && blocks.length)
+        ? blocks
+        : CITLayout.blocksFromPlainText(text || '', 'left');
+      if (!paras.length) {
+        const para = document.createElement('div');
+        para.className = 'para';
+        const line = document.createElement('div');
+        line.className = 'line';
+        line.textContent = text || '';
+        para.appendChild(line);
+        body.appendChild(para);
       } else {
-        this.buildPopupChrome('result');
-        this.addToolbar(false, true);
-        const body = document.createElement('div');
-        body.className = 'body';
-        body.textContent = this.translatedText;
-        this.popup.appendChild(body);
-        this.bodyEl = body;
+        for (const block of paras) {
+          const para = document.createElement('div');
+          para.className = 'para';
+          para.style.textAlign = block.align || 'left';
+          if (block.kind) {
+            // Image OCR layout: headings, bullets, indents, original gaps.
+            para.classList.add('is-ocr', `is-${block.kind}`);
+            if (block.region === 'aside') para.classList.add('is-aside');
+            if (block.kind === 'heading' && Number(block.scale) > 1) {
+              para.style.fontSize = `${Math.min(1.6, Number(block.scale))}em`;
+            }
+            const gap = Number(block.gapBefore);
+            para.style.marginTop = Number.isFinite(gap)
+              ? `${Math.min(1.6, Math.max(0.3, gap * 0.55)).toFixed(2)}em`
+              : '0';
+            const indent = Number(block.indent);
+            if (indent > 0) {
+              const pct = `${(Math.min(0.4, indent) * 100).toFixed(1)}%`;
+              if (block.kind === 'bullet') para.style.setProperty('--cit-indent', pct);
+              else para.style.paddingLeft = pct;
+            }
+          }
+          const lines = block.lines && block.lines.length ? block.lines : [''];
+          for (const item of lines) {
+            const line = document.createElement('div');
+            line.className = 'line';
+            line.textContent = item;
+            para.appendChild(line);
+          }
+          body.appendChild(para);
+        }
       }
-      this.syncPosition();
+      this.popup.appendChild(body);
+      this.bodyEl = body;
+      this.place();
     }
 
-    buildPopupChrome(kind) {
+    buildPopup(kind) {
       this.popup = document.createElement('div');
       this.popup.className = 'popup';
       if (kind === 'error') this.popup.classList.add('is-error');
@@ -1258,26 +1652,9 @@ function boot() {
       this.wrap.appendChild(this.popup);
     }
 
-    addToolbar(errorMode, inPopup) {
+    addToolbar() {
       const toolbar = document.createElement('div');
-      toolbar.className = inPopup ? 'toolbar toolbar-in-popup' : 'toolbar';
-      if (!errorMode) {
-        const toggle = document.createElement('button');
-        toggle.type = 'button';
-        toggle.textContent = '显示原文';
-        toggle.addEventListener('click', (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          this.showingOriginal = !this.showingOriginal;
-          if (this.mode === 'overlay' && this.phase === 'result') {
-            this.wrap.classList.toggle('is-original', this.showingOriginal);
-          } else if (this.bodyEl) {
-            this.bodyEl.textContent = this.showingOriginal ? this.sourceText : this.translatedText;
-          }
-          toggle.textContent = this.showingOriginal ? '显示译文' : '显示原文';
-        });
-        toolbar.appendChild(toggle);
-      }
+      toolbar.className = 'toolbar';
       const close = document.createElement('button');
       close.type = 'button';
       close.textContent = '关闭';
@@ -1287,170 +1664,262 @@ function boot() {
         this.destroy();
       });
       toolbar.appendChild(close);
-      if (inPopup && this.popup) this.popup.prepend(toolbar);
-      else this.wrap.appendChild(toolbar);
+      if (this.popup) this.popup.prepend(toolbar);
       this.toolbar = toolbar;
+      this.bindDrag(toolbar);
     }
 
-    layoutOverlay(rects) {
-      const union = unionRect(rects);
-      if (!union.width || !union.height) {
-        this.switchToPopup(this.anchor || (this.snapshot && this.snapshot.mouse));
-        return;
-      }
-      const pad = 2;
-      let boxLeft = union.left - pad;
-      let boxTop = union.top - pad;
-      let boxW = Math.max(8, union.width + pad * 2);
-      let boxH = Math.max(8, union.height + pad * 2);
-      const vw = window.innerWidth || document.documentElement.clientWidth || boxW;
-      const vh = window.innerHeight || document.documentElement.clientHeight || boxH;
-      const canAbove = boxTop >= TOOLBAR_H + 4;
-      const canBelow = boxTop + boxH + TOOLBAR_H + 4 <= vh;
-      let hostLeft = boxLeft;
-      let hostTop;
-      let hostW = boxW;
-      let hostH;
-      let toolbarPos = 'above';
-      if (canAbove) {
-        hostTop = boxTop - TOOLBAR_H;
-        hostH = boxH + TOOLBAR_H;
-        toolbarPos = 'above';
-      } else if (canBelow) {
-        hostTop = boxTop;
-        hostH = boxH + TOOLBAR_H;
-        toolbarPos = 'below';
-      } else {
-        hostTop = boxTop;
-        hostH = boxH;
-        toolbarPos = 'inside';
-      }
-
-      // Keep the host on-screen horizontally if possible, but do not shrink the text box.
-      if (hostLeft + hostW > vw - 4 && hostW < vw) {
-        hostLeft = Math.max(4, vw - 4 - hostW);
-      }
-      if (hostLeft < 4 && boxLeft >= 0) hostLeft = Math.max(0, boxLeft);
-
-      this.host.style.left = `${hostLeft}px`;
-      this.host.style.top = `${hostTop}px`;
-      this.host.style.width = `${hostW}px`;
-      this.host.style.height = `${hostH}px`;
-      this.host.style.overflow = 'visible';
-
-      if (this.toolbar && this.mode === 'overlay') {
-        this.toolbar.style.left = 'auto';
-        this.toolbar.style.right = '0px';
-        if (toolbarPos === 'above') {
-          this.toolbar.style.top = '0px';
-        } else if (toolbarPos === 'below') {
-          this.toolbar.style.top = `${boxH + 4}px`;
-        } else {
-          this.toolbar.style.top = '0px';
-        }
-      }
-
-      if (this.phase === 'loading' || this.phase === 'error') {
-        const status = this.wrap.querySelector('.status');
-        if (status) {
-          const minW = 160;
-          const minH = 44;
-          if (hostW < minW || hostH < minH) {
-            const extraW = Math.max(0, minW - hostW);
-            const extraH = Math.max(0, minH - hostH);
-            hostLeft = Math.max(4, hostLeft - extraW / 2);
-            hostW += extraW;
-            hostH += extraH;
-            if (hostLeft + hostW > vw - 4) hostLeft = Math.max(4, vw - 4 - hostW);
-            this.host.style.left = `${hostLeft}px`;
-            this.host.style.width = `${hostW}px`;
-            this.host.style.height = `${hostH}px`;
-          }
-        }
-        return;
-      }
-
-      if (this.region && this.textEl && this.phase === 'result') {
-        const relLeft = boxLeft - hostLeft;
-        const relTop = boxTop - hostTop;
-        this.region.style.left = `${relLeft}px`;
-        this.region.style.top = `${relTop}px`;
-        this.region.style.width = `${boxW}px`;
-        this.region.style.height = `${boxH}px`;
-        this.region.style.alignItems = boxH <= 40 ? 'center' : 'flex-start';
-        fitText(this.textEl, boxW, boxH);
-        const computed = parseFloat(this.textEl.style.fontSize) || 0;
-        if (computed < 12 && this.translatedText) {
-          const neededH = Math.min(Math.max(boxH, 48), Math.max(boxH, Math.min(vh * 0.5, 280)));
-          if (neededH > boxH) {
-            const grownH = neededH;
-            if (toolbarPos === 'below') hostH = grownH + TOOLBAR_H;
-            else if (toolbarPos === 'above') hostH = grownH + TOOLBAR_H;
-            else hostH = grownH;
-            const overflow = hostTop + hostH - (vh - 4);
-            if (overflow > 0) hostTop = Math.max(4, hostTop - overflow);
-            this.host.style.top = `${hostTop}px`;
-            this.host.style.height = `${hostH}px`;
-            this.region.style.top = `${boxTop - hostTop}px`;
-            this.region.style.height = `${grownH}px`;
-            if (this.toolbar && toolbarPos === 'below') {
-              this.toolbar.style.top = `${grownH + 4}px`;
-            }
-            fitText(this.textEl, boxW, grownH);
-          }
-        }
-      }
+    bindDrag(handle) {
+      handle.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0) return;
+        if (event.target && event.target.closest && event.target.closest('button')) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const rect = this.host.getBoundingClientRect();
+        const dx = event.clientX - rect.left;
+        const dy = event.clientY - rect.top;
+        this.userMoved = true;
+        this.dragging = true;
+        const onMove = (ev) => {
+          if (this.destroyed) return;
+          this.placeAt(ev.clientX - dx, ev.clientY - dy);
+        };
+        const onUp = () => {
+          window.removeEventListener('pointermove', onMove, true);
+          window.removeEventListener('pointerup', onUp, true);
+          window.removeEventListener('pointercancel', onUp, true);
+          this.dragging = false;
+          if (this.destroyed) return;
+          const r = this.host.getBoundingClientRect();
+          this.placeAt(r.left, r.top);
+          this.rememberOffset();
+        };
+        window.addEventListener('pointermove', onMove, true);
+        window.addEventListener('pointerup', onUp, true);
+        window.addEventListener('pointercancel', onUp, true);
+      });
     }
 
-    layoutPopup() {
+    applySize() {
       const margin = 8;
       const vw = window.innerWidth || document.documentElement.clientWidth || 320;
       const vh = window.innerHeight || document.documentElement.clientHeight || 240;
-      const maxW = Math.min(420, Math.max(200, vw - margin * 2));
-      this.host.style.width = `${maxW}px`;
+      const minW = this.phase === 'result' ? 140 : 168;
+      const capW = Math.max(minW, vw - margin * 2);
+
       this.host.style.height = 'auto';
       this.host.style.overflow = 'visible';
-
-      let x = (this.anchor && this.anchor.x) || 24;
-      let y = (this.anchor && this.anchor.y) || 24;
-      const placed = this.snapshot ? getPlacementRects(this.snapshot) : null;
-      if (this.mode === 'popup' && placed && placed.rects.length) {
-        const union = unionRect(placed.rects);
-        x = union.left;
-        y = union.bottom + 6;
+      this.host.style.width = 'auto';
+      this.host.style.maxWidth = 'none';
+      if (this.popup) this.popup.style.width = 'max-content';
+      if (this.bodyEl) {
+        this.bodyEl.style.maxHeight = 'none';
+        this.bodyEl.style.overflow = 'visible';
       }
 
-      this.host.style.left = `${Math.max(margin, x)}px`;
-      this.host.style.top = `${Math.max(margin, y)}px`;
+      let natural = Math.ceil((this.popup || this.host).getBoundingClientRect().width);
+      if (!Number.isFinite(natural) || natural < minW) natural = minW;
 
-      const rect = this.host.getBoundingClientRect();
-      let left = rect.left;
-      let top = rect.top;
-      const w = rect.width || maxW;
-      const h = rect.height || 80;
-      if (left + w + margin > vw) left = vw - w - margin;
-      if (top + h + margin > vh) top = Math.max(margin, y - h - 12);
-      if (top + h + margin > vh) top = vh - h - margin;
-      if (left < margin) left = margin;
-      if (top < margin) top = margin;
-      this.host.style.left = `${left}px`;
-      this.host.style.top = `${top}px`;
+      const anchor = this.getAnchor() || {};
+      const source = anchor.sourceRect;
+      const lineCount = this.bodyEl ? this.bodyEl.querySelectorAll('.line').length : 0;
+      const sourceW = (source && source.width >= 80) ? Math.round(source.width) : 0;
+      const maxReasonable = Math.min(capW, Math.max(sourceW, Math.round(Math.min(vw * 0.5, 560)), 420));
+      let width = Math.min(maxReasonable, Math.max(minW, natural));
+      if (this.phase === 'result' && anchor.preferWidth > 0) {
+        // Image OCR: as wide as the original text column on screen.
+        width = Math.min(capW, Math.max(Math.min(260, capW), Math.round(anchor.preferWidth)));
+      } else if (this.phase === 'result' && sourceW) {
+        const longContent = lineCount >= 2 || natural >= sourceW * 0.45;
+        if (longContent) {
+          width = Math.min(capW, Math.max(width, sourceW));
+        }
+      }
+      if (this.phase !== 'result') {
+        width = Math.min(width, 240);
+      }
+
+      this.host.style.width = `${width}px`;
+      if (this.popup) this.popup.style.width = '100%';
+
+      const toolbarH = this.toolbar ? this.toolbar.getBoundingClientRect().height : 0;
+      const maxBody = Math.max(72, Math.floor(vh * 0.86) - Math.ceil(toolbarH) - 8);
+      if (this.bodyEl && this.phase === 'result') {
+        this.bodyEl.style.maxHeight = `${maxBody}px`;
+        this.bodyEl.style.overflow = 'auto';
+      }
+      return width;
+    }
+
+    setHostPos(left, top) {
+      this.pos = { x: left, y: top };
+      this.host.style.left = `${Math.round(left * 10) / 10}px`;
+      this.host.style.top = `${Math.round(top * 10) / 10}px`;
+    }
+
+    // Clamp into the viewport: used only for initial placement and dragging.
+    placeAt(left, top) {
+      const margin = 8;
+      const vw = window.innerWidth || document.documentElement.clientWidth || 320;
+      const vh = window.innerHeight || document.documentElement.clientHeight || 240;
+      const w = this.host.offsetWidth || 0;
+      const h = this.host.offsetHeight || 0;
+      left = Math.min(Math.max(margin, left), Math.max(margin, vw - w - margin));
+      top = Math.min(Math.max(margin, top), Math.max(margin, vh - h - margin));
+      this.setHostPos(left, top);
+    }
+
+    refPoint() {
+      const el = this.anchorEl;
+      if (el) {
+        try {
+          if (el.isConnected) {
+            const r = el.getBoundingClientRect();
+            if (r.width >= 1 || r.height >= 1) {
+              this.lastRef = { x: r.left, y: r.top };
+              return this.lastRef;
+            }
+          }
+        } catch (_err) {}
+        // Hidden/removed anchor: hold still until checkAlive closes us.
+        if (this.lastRef) return this.lastRef;
+      }
+      // No element anchor: follow the document (window scroll).
+      return {
+        x: -(window.scrollX || window.pageXOffset || 0),
+        y: -(window.scrollY || window.pageYOffset || 0)
+      };
+    }
+
+    rememberOffset() {
+      if (!this.pos) return;
+      const ref = this.refPoint();
+      this.offset = { x: this.pos.x - ref.x, y: this.pos.y - ref.y };
+    }
+
+    follow() {
+      if (this.destroyed || this.dragging || !this.offset) return;
+      const ref = this.refPoint();
+      const x = ref.x + this.offset.x;
+      const y = ref.y + this.offset.y;
+      if (!this.pos || Math.abs(this.pos.x - x) > 0.25 || Math.abs(this.pos.y - y) > 0.25) {
+        this.setHostPos(x, y);
+      }
+    }
+
+    handleResize() {
+      if (this.destroyed) return;
+      if (this.userMoved) {
+        this.follow();
+        return;
+      }
+      this.place();
+    }
+
+    checkAlive() {
+      if (this.destroyed) return;
+      if (currentRouteKey() !== this.routeKey) {
+        this.destroy();
+        return;
+      }
+      const el = this.anchorEl;
+      if (!el) return;
+      let gone = false;
+      try {
+        if (!el.isConnected) {
+          gone = true;
+        } else if (this.img) {
+          const r = el.getBoundingClientRect();
+          if (r.width < 2 || r.height < 2) {
+            gone = true;
+          } else {
+            const cs = getComputedStyle(el);
+            if (cs.display === 'none' || cs.visibility === 'hidden') gone = true;
+          }
+        }
+      } catch (_err) {
+        gone = true;
+      }
+      if (gone) {
+        this.missingTicks += 1;
+        if (this.missingTicks >= 2) this.destroy();
+      } else {
+        this.missingTicks = 0;
+      }
+    }
+
+    place() {
+      if (this.destroyed) return;
+      if (this.img && !isElementCurrent(this.img)) {
+        this.destroy();
+        return;
+      }
+      const preferW = this.applySize();
+      if (this.userMoved && this.offset) {
+        this.follow();
+        return;
+      }
+      const margin = 8;
+      const vw = window.innerWidth || document.documentElement.clientWidth || 320;
+      const vh = window.innerHeight || document.documentElement.clientHeight || 240;
+      const anchor = this.getAnchor() || {};
+      let x;
+      let y;
+      if (this.phase === 'result' && anchor.imageRect && anchor.columnRect) {
+        const res = CITLayout.pickImagePanelPlacement({
+          vw,
+          vh,
+          margin,
+          imageRect: anchor.imageRect,
+          columnRect: anchor.columnRect,
+          textRects: anchor.textRects,
+          preferW,
+          minW: Math.min(260, preferW),
+          measure: (w) => {
+            this.host.style.width = `${w}px`;
+            return this.host.getBoundingClientRect().height || this.host.offsetHeight || 80;
+          }
+        });
+        this.host.style.width = `${res.width}px`;
+        x = res.x;
+        y = res.y;
+      } else {
+        const rect = this.host.getBoundingClientRect();
+        const w = rect.width || this.host.offsetWidth || 240;
+        const h = rect.height || this.host.offsetHeight || 80;
+        const pos = CITLayout.pickPanelPosition({
+          sourceRect: anchor.sourceRect,
+          mouse: anchor.mouse,
+          panelW: w,
+          panelH: h,
+          vw,
+          vh,
+          margin,
+          prefer: anchor.prefer
+        });
+        x = pos.x;
+        y = pos.y;
+      }
+      this.setHostPos(x, y);
+      this.rememberOffset();
     }
 
     destroy() {
       if (this.destroyed) return;
       this.destroyed = true;
       clearTimeout(this.errorTimer);
-      try { this.resizeObserver.disconnect(); } catch (_err) { /* ignore */ }
-      window.removeEventListener('resize', this.onSync, true);
-      document.removeEventListener('scroll', this.onSync, true);
+      clearInterval(this.aliveTimer);
+      if (this.rafId) cancelAnimationFrame(this.rafId);
+      window.removeEventListener('resize', this.onResize, true);
+      document.removeEventListener('scroll', this.onScroll, true);
       if (window.visualViewport) {
-        window.visualViewport.removeEventListener('resize', this.onSync);
-        window.visualViewport.removeEventListener('scroll', this.onSync);
+        window.visualViewport.removeEventListener('resize', this.onResize);
+        window.visualViewport.removeEventListener('scroll', this.onScroll);
       }
       this.host.remove();
       activeOverlays.delete(this);
       if (currentSelectionView === this) currentSelectionView = null;
+      if (this.img && overlays.get(this.img) === this) overlays.delete(this.img);
     }
   }
 
