@@ -5,7 +5,7 @@ Chrome / Edge 扩展：在网页**图片**或**选中的文字**上右键「翻�
 Chrome / Edge extension: right-click an **image** or **selected text** → **翻译** → **谷歌翻译** or **必应翻译**. The translation appears in a draggable floating window on the same page, without covering the original and without opening a new tab. Non-Chinese text is translated into Simplified Chinese; Simplified Chinese is translated into English.
 
 **仓库 / Repo:** https://github.com/ZhangJP-wh/chrome-image-translate  
-**版本 / Version:** **0.1.12**（见 `manifest.json`）
+**版本 / Version:** **0.1.13**（见 `manifest.json`）
 
 ### 一句话场景 / What it’s for
 
@@ -128,7 +128,7 @@ See also [`AGENT_INSTALL.md`](./AGENT_INSTALL.md).
 | 「必应翻译」排在「谷歌翻译」下面，面向中国大陆等谷歌可能无法访问的网络，无需申请密钥 | **必应翻译** sits below **谷歌翻译** for networks where Google is unreachable (e.g. mainland China); no API key to apply for |
 | 图片识别（OCR）在本地完成，不依赖 CDN；选中文字不经过 OCR | Image OCR runs locally with no CDN; selected text skips OCR |
 | 点工具栏图标可勾选显示「谷歌翻译」「必应翻译」或两项都显示。只开一项时出现在右键一级菜单；两项都开时收成「翻译」子菜单，并多一行提示可在设置里只勾选一项；点击该行会打开设置页并定位到勾选项 | In the toolbar popup, choose Google, Bing, or both. One engine appears as a top-level item; both are grouped under a **翻译** submenu, whose hint row opens the settings page and focuses the engine checkboxes |
-| 菜单前的图标使用谷歌翻译产品图标（Chrome 会把扩展图标显示在右键菜单旁） | Menu uses the Google Translate product icon (Chrome shows the extension icon beside the item) |
+| 菜单使用本项目的蓝白文字卡片图标（Chrome 会把扩展图标显示在右键菜单旁） | Menu uses the project’s blue-and-white text-card icon (Chrome shows the extension icon beside the item) |
 | 自带虚构英文示例图 `demo/test-en-text.png`，方便试用图片翻译 | Ships a fictional English demo image `demo/test-en-text.png` for trying image translation |
 
 ---
@@ -229,6 +229,11 @@ Do not use real browsing history, private URLs, or real account data in README/r
 ---
 
 ## 变更 / Changelog
+
+### v0.1.13
+
+- 替换扩展与商店图标，移除 Google 翻译产品图标；翻译功能保持不变。
+  Replace extension and store branding; translation behavior is unchanged.
 
 ### v0.1.12
 
