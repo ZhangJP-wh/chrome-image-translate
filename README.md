@@ -1,18 +1,18 @@
 # 图片翻译 / Image Translate
 
-Chrome / Edge 扩展：在网页**图片**或**选中的文字**上右键「翻译」，可选「谷歌翻译」或「必应翻译」。译文以可拖动的悬浮小窗显示在当前页，不覆盖原文，也不打开新标签。不是中文的内容译成简体中文；如果原文是简体中文，则译成英文。
+Chrome / Edge 扩展：在网页**图片**或**选中的文字**上右键「翻译」，可选「谷歌翻译」或「必应翻译」。译文以可拖动的悬浮小窗显示在当前页，不覆盖原文，也不打开新标签。不是简体中文的内容（包括日语、韩语、繁体中文、英语等）一律译成简体中文；如果原文是简体中文，则译成英文。
 
-Chrome / Edge extension: right-click an **image** or **selected text** → **翻译** → **谷歌翻译** or **必应翻译**. The translation appears in a draggable floating window on the same page, without covering the original and without opening a new tab. Non-Chinese text is translated into Simplified Chinese; Simplified Chinese is translated into English.
+Chrome / Edge extension: right-click an **image** or **selected text** → **翻译** → **谷歌翻译** or **必应翻译**. The translation appears in a draggable floating window on the same page, without covering the original and without opening a new tab. Text that is not Simplified Chinese (including Japanese, Korean, Traditional Chinese, and English) is translated into Simplified Chinese; Simplified Chinese is translated into English.
 
 **仓库 / Repo:** https://github.com/ZhangJP-wh/chrome-image-translate  
-**版本 / Version:** **0.1.13**（见 `manifest.json`）
+**版本 / Version:** **0.1.14**（见 `manifest.json`）
 
 ### 一句话场景 / What it’s for
 
 - 看到带外文的图片，不必另开翻译网站，译文出现在可拖动的悬浮小窗里，方便和原文对照  
   Translate a foreign-language image without leaving the page; the result appears in a draggable floating window so you can compare it with the original
-- 选中一段文字，同样用悬浮小窗显示译文；简体中文会译成英文，其他语言译成简体中文  
-  Select text and show the translation in the same kind of floating window. Simplified Chinese becomes English; anything else becomes Simplified Chinese
+- 选中一段文字，同样用悬浮小窗显示译文；简体中文会译成英文，日语、韩语等其他语言译成简体中文  
+  Select text and show the translation in the same kind of floating window. Simplified Chinese becomes English; anything else, including Japanese and Korean, becomes Simplified Chinese
 - 两种翻译服务可选：上面是「谷歌翻译」，下面是「必应翻译」  
   Two engines: **谷歌翻译** first, **必应翻译** below it
 - 在中国大陆，谷歌翻译往往连不上；「必应翻译」通常可直接使用，也不用申请密钥  
@@ -53,7 +53,7 @@ Chrome / Edge extension: right-click an **image** or **selected text** → **翻
 
 - 在网页的**图片**上右键 → **翻译** → **谷歌翻译** 或 **必应翻译**
 - 或先**选中一段文字**再右键 → **翻译** → 同样可选这两种服务
-- 稍等片刻，当前页会出现一个可拖动的悬浮小窗，里面是译文。不是中文会译成简体中文；原文是简体中文则会译成英文
+- 稍等片刻，当前页会出现一个可拖动的悬浮小窗，里面是译文。不是简体中文（包括日语、韩语、繁体中文、英语等）会译成简体中文；原文是简体中文则会译成英文
 - 可拖动小窗、选中窗里的文字，或点 **关闭** 去掉小窗
 - 点工具栏上的扩展图标，可以勾选要显示的翻译服务：只开一项时，该项会出现在右键一级菜单；两项都开时，会出现「翻译」二级菜单（这是 Chrome 的限制）
 - 仓库里的 `demo/test-en-text.png` 是一张虚构英文示例图，可以放到任意普通网页里用来试用图片翻译
@@ -63,7 +63,7 @@ Then:
 - Right-click an **image** → **翻译** → **谷歌翻译** or **必应翻译**
 - Or **select text**, then right-click → the same submenu
 - Stay on the same page; the translation appears in a draggable floating window
-- You can select text in the window, or click **关闭** to dismiss it. Non-Chinese text becomes Simplified Chinese; Simplified Chinese becomes English
+- You can select text in the window, or click **关闭** to dismiss it. Text that is not Simplified Chinese (including Japanese and Korean) becomes Simplified Chinese; Simplified Chinese becomes English
 - Click the toolbar icon to choose which engines appear in the context menu, and to reread the short usage reminder
 - Try image translation with `demo/test-en-text.png` (a fictional English sentence, not a real webpage screenshot)
 
@@ -102,7 +102,7 @@ When done, tell me briefly that it is installed and how to:
 - right-click an image → 翻译 → 谷歌翻译 or 必应翻译
 - select text, then right-click → 翻译 → the same two options
 - drag the floating window, select text in it, or click 关闭
-- non-Chinese text is translated into Simplified Chinese; Simplified Chinese is translated into English
+- text that is not Simplified Chinese (including Japanese and Korean) is translated into Simplified Chinese; Simplified Chinese is translated into English
 ```
 
 仓库里也有独立文件 [`AGENT_INSTALL.md`](./AGENT_INSTALL.md)，Agent 可直接按该文件执行。  
@@ -117,7 +117,7 @@ See also [`AGENT_INSTALL.md`](./AGENT_INSTALL.md).
 | 在网页**图片**上右键 → **翻译** → **谷歌翻译** 或 **必应翻译** | Right-click an **image** → **翻译** → **谷歌翻译** or **必应翻译** |
 | 选中文字后右键，菜单相同，两种服务都可用 | The same submenu works for **selected text**, with both engines |
 | 图片和选中文字：译文都显示在当前页的可拖动悬浮小窗里，不覆盖原文 | Images and selected text: the translation appears in a draggable on-page floating window, without covering the original |
-| 不是中文一律译成简体中文；原文是简体中文则译成英文 | Non-Chinese text is translated into Simplified Chinese; Simplified Chinese is translated into English |
+| 不是简体中文（包括日语、韩语、繁体中文、英语等）一律译成简体中文；原文是简体中文则译成英文 | Text that is not Simplified Chinese (including Japanese, Korean, Traditional Chinese, and English) is translated into Simplified Chinese; Simplified Chinese is translated into English |
 | 悬浮小窗可以拖动，窗里的文字可以选中复制，点「关闭」去掉 | The window can be dragged, its text can be selected, and **关闭** dismisses it |
 | 小窗大小随译文长短自动调节；分段、换行尽量与原文一一对应，左对齐 / 右对齐 / 居中也尽量保持一致，方便中英文对照 | The window resizes to the translation; paragraphs, line breaks, and left / right / center alignment follow the original as closely as possible, for side-by-side comparison |
 | 图片译文按原图的文字栏排版：以文字栏（而不是整张图）判断左对齐 / 居中 / 右对齐，标题加大加粗，项目符号显示成带悬挂缩进的列表，段落间距按原图；Logo 之类的零散字符会被略去 | Image translations follow the image's text column: alignment is judged against the column (not the whole image), headings are larger and bold, bullets become a list with a hanging indent, paragraph gaps follow the original, and stray glyphs such as logos are dropped |
@@ -135,9 +135,9 @@ See also [`AGENT_INSTALL.md`](./AGENT_INSTALL.md).
 
 ## 使用说明 / How it works
 
-扩展会在本地识别图片中的文字，再按你选的服务翻译，并把译文放进当前页的悬浮小窗。选中网页文字时不经过识别，直接翻译，也同样用悬浮小窗显示。不是中文（包括繁体中文）会译成简体中文；如果识别或选中的内容是简体中文，则译成英文。小窗可以拖动，窗里的文字可以选中复制，不会盖住原文。小窗会按译文长短自动伸缩：信很长时窗口也较长，短句则只占较小一块；分段和换行尽量与原文对应，对齐方式（左对齐、右对齐、居中）也尽量保持一致，方便对照学习。
+扩展会在本地识别图片中的文字，再按你选的服务翻译，并把译文放进当前页的悬浮小窗。选中网页文字时不经过识别，直接翻译，也同样用悬浮小窗显示。不是简体中文（包括日语、韩语、繁体中文、英语等）会译成简体中文；如果识别或选中的内容是简体中文，则译成英文。小窗可以拖动，窗里的文字可以选中复制，不会盖住原文。小窗会按译文长短自动伸缩：信很长时窗口也较长，短句则只占较小一块；分段和换行尽量与原文对应，对齐方式（左对齐、右对齐、居中）也尽量保持一致，方便对照学习。
 
-The extension finds text in an image locally, translates it with the engine you picked, and shows the result in an on-page floating window. Selected page text is translated directly (no OCR) and shown the same way. Non-Chinese text, including Traditional Chinese, is translated into Simplified Chinese; Simplified Chinese is translated into English. The window is draggable, its text is selectable, and it does not cover the original. It also resizes to the translation: a long letter gets a taller window, a short snippet stays compact. Paragraphs, line breaks, and alignment (left, right, or center) follow the original as closely as possible, so you can compare the two side by side.
+The extension finds text in an image locally, translates it with the engine you picked, and shows the result in an on-page floating window. Selected page text is translated directly (no OCR) and shown the same way. Text that is not Simplified Chinese — including Japanese, Korean, Traditional Chinese, and English — is translated into Simplified Chinese; Simplified Chinese is translated into English. The window is draggable, its text is selectable, and it does not cover the original. It also resizes to the translation: a long letter gets a taller window, a short snippet stays compact. Paragraphs, line breaks, and alignment (left, right, or center) follow the original as closely as possible, so you can compare the two side by side.
 
 默认情况下，图片和选中文字共用同一个「翻译」菜单：点开后先是「谷歌翻译」，下面是「必应翻译」。也可以在工具栏弹出页里只勾选其中一项，这时该项会直接出现在右键一级菜单，不再经过二级菜单。前者走 Google 翻译，在中国大陆往往需要可访问 Google 的网络；后者走必应翻译的公开网页通道（通常会落到 `cn.bing.com`），在中国大陆一般可直接使用，也不需要用户自己申请密钥。
 
@@ -161,14 +161,14 @@ Some sites (such as X) clear the selection when the context menu opens. The exte
 
 - 对比较清晰的印刷体或截图效果最好；手写、艺术字、很小或很糊的字可能识别不准，或提示「未识别到文字」。  
   Works best on clear print or screenshots. Handwriting, stylized, tiny, or blurry text may be missed or misread.
-- 第一次在某个浏览器配置里翻译图片时，可能要几秒来加载本地识别组件。  
-  The first image translation in a browser profile may take a few seconds to load the local OCR engine.
+- 第一次在某个浏览器配置里翻译图片时，可能要多花几秒来加载本地识别组件。为了区分日语 / 韩语和中文，识别前会先做一次缩小的语言探测，因此首次（以及刚换到另一种语言时）会比以前稍慢。  
+  The first image translation in a browser profile may take several seconds to load the local OCR engine. A short, downscaled probe is used to tell Japanese / Korean from Chinese, so the first run (and a switch to another language pack) can be a little slower than before.
 - 翻译需要联网。「谷歌翻译」会访问 Google 翻译，在中国大陆通常不可用。「必应翻译」走必应的公开翻译页面，在中国大陆一般可直接使用；这不是微软官方开放的长期 API，若对方改页面，此选项可能暂时失效，需要更新扩展。  
   Translation needs a network. **谷歌翻译** is usually unavailable in mainland China. **必应翻译** uses Bing’s public translator page and typically works there, but it is not a guaranteed official long-term API; if Microsoft changes the page, this option may break until the extension is updated.
 - 当前版本的图片翻译主要支持普通网页里的 `<img>` 图片（含跨域，以及 `blob:` / `data:` 图片）。复杂的画布或纯 CSS 背景图暂未专门处理。  
   Image translation currently targets ordinary `<img>` elements (including cross-origin, `blob:`, and `data:` images). Canvas and pure CSS background images are not specially handled yet.
-- 预置的图片识别语言模型包含英语和简体中文。其他语言也可能认出一部分，但效果会差一些。手写或艺术字仍可能识别不准。  
-  The bundled OCR packs cover English and Simplified Chinese. Other languages may be partially recognized, with lower accuracy. Handwriting and stylized type may still be misread.
+- 预置的图片识别语言模型包含英语、简体中文、日语和韩语（均来自 tessdata_fast 一类的 LSTM 模型，本地加载，不走 CDN）。日语图会按 `jpn+eng` 识别（可夹杂 Youtube 这类英文），韩语按 `kor+eng`，其余仍用 `eng+chi_sim`。不会把 `chi_sim` 和 `jpn` 放进同一次识别，以免两个 CJK 模型互相干扰。目前未附带竖排日语（`jpn_vert`）模型，从上到下的日文可能识别较差。其他语言也可能认出一部分，但效果会差一些。手写或艺术字仍可能识别不准。  
+  The bundled OCR packs cover English, Simplified Chinese, Japanese, and Korean (tessdata_fast-style LSTM models, loaded locally with no CDN). Japanese images are recognized with `jpn+eng` (so mixed English such as “Youtube” is kept), Korean with `kor+eng`, and everything else with `eng+chi_sim`. `chi_sim` and `jpn` are never combined in one pass, because they share CJK code points and can degrade each other. Vertical Japanese (`jpn_vert`) is not bundled, so tategaki text may be misread. Other languages may be partially recognized, with lower accuracy. Handwriting and stylized type may still be misread.
 - 译文一律显示在当前页的悬浮小窗中，不会打开新标签，也不会改写输入框里的原文。若选区在右键后被页面清掉，一般仍可凭当时记下的文字完成翻译。  
   The translation is always shown in an on-page floating window: it will not open a new tab or overwrite text inside an input. If a site clears the selection after the right-click, the snapshot taken at that moment is usually enough to finish the translation.
 - Chrome 内置 PDF 阅读器通常无法注入扩展脚本，因此 PDF 里的选中文字可能无法翻译。  
@@ -229,6 +229,13 @@ Do not use real browsing history, private URLs, or real account data in README/r
 ---
 
 ## 变更 / Changelog
+
+### v0.1.14
+
+- 图片识别增加日语、韩语语言模型，并在识别前用缩小图探测文字种类：日语（可夹杂英文）走 `jpn+eng`，韩语走 `kor+eng`，其余仍走 `eng+chi_sim`。这样日语假名能被认出，不会再被当成简体中文而误译成英文，内容也不会大段丢失  
+  Image OCR now bundles Japanese and Korean packs and runs a downscaled script probe first: Japanese (including mixed English) uses `jpn+eng`, Korean uses `kor+eng`, and everything else stays on `eng+chi_sim`. Kana is recognized, so Japanese is no longer treated as Simplified Chinese and mistranslated into English, and far fewer lines are dropped
+- 翻译方向的判断收得更紧：原文里只要出现假名或韩文，就按「不是简体中文」译成简体中文，即使汉字很多、假名只有一两个。竖排日语模型尚未打包，首次加载可能会稍慢一些  
+  The language-target rule is tighter: any real hiragana, katakana, or hangul means the source is not Simplified Chinese and is translated into Simplified Chinese, even when the text is Kanji-heavy and only has a little kana. Vertical Japanese is not bundled yet, and the first image load may take a little longer
 
 ### v0.1.13
 
