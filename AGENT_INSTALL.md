@@ -8,7 +8,7 @@ If a user pastes https://github.com/ZhangJP-wh/chrome-image-translate and asks y
 
 - Extension loaded via “Load unpacked” / 「加载已解压的扩展程序」
 - The extension named 「图片翻译」 appears in `chrome://extensions` (or `edge://extensions`)
-- Toolbar icon visible (Google Translate product icon)
+- Toolbar icon visible (project blue-and-white text-card icon)
 - Right-click a webpage **image** shows 「翻译」, which opens a submenu: 「谷歌翻译」 then 「必应翻译」
 - Selecting text and right-clicking shows the same 「翻译」 submenu
 - Site access / host permissions allowed if prompted
