@@ -2,29 +2,62 @@
 'use strict';
 
 let workerPromise = null;
+let workerLang = null;
+let workerLock = Promise.resolve();
 
-function getWorker() {
+function workerOptions() {
+  return {
+    workerPath: chrome.runtime.getURL('lib/worker.min.js'),
+    corePath: chrome.runtime.getURL('lib'),
+    langPath: chrome.runtime.getURL('tessdata'),
+    workerBlobURL: false,
+    gzip: true,
+    cacheMethod: 'none'
+  };
+}
+
+async function applyOcrParams(worker) {
+  await worker.setParameters({
+    tessedit_pageseg_mode: '3',
+    preserve_interword_spaces: '1'
+  });
+}
+
+function getWorker(lang) {
+  const target = lang || CITLang.OCR_LANG_ZH_EN;
   if (!workerPromise) {
     workerPromise = (async () => {
-      const worker = await Tesseract.createWorker('eng+chi_sim', 1, {
-        workerPath: chrome.runtime.getURL('lib/worker.min.js'),
-        corePath: chrome.runtime.getURL('lib'),
-        langPath: chrome.runtime.getURL('tessdata'),
-        workerBlobURL: false,
-        gzip: true,
-        cacheMethod: 'none'
-      });
-      await worker.setParameters({
-        tessedit_pageseg_mode: '3',
-        preserve_interword_spaces: '1'
-      });
+      const worker = await Tesseract.createWorker(target, 1, workerOptions());
+      await applyOcrParams(worker);
+      workerLang = target;
       return worker;
     })().catch((err) => {
       workerPromise = null;
+      workerLang = null;
       throw err;
     });
+    return workerPromise;
   }
-  return workerPromise;
+  return workerPromise.then(async (worker) => {
+    if (workerLang === target) return worker;
+    await worker.reinitialize(target, 1);
+    await applyOcrParams(worker);
+    workerLang = target;
+    return worker;
+  }).catch((err) => {
+    workerPromise = null;
+    workerLang = null;
+    throw err;
+  });
+}
+
+function withWorker(lang, fn) {
+  const run = workerLock.then(async () => {
+    const worker = await getWorker(lang);
+    return fn(worker);
+  });
+  workerLock = run.then(() => undefined, () => undefined);
+  return run;
 }
 
 async function imageFromBlob(blob) {
@@ -44,6 +77,28 @@ async function imageFromBlob(blob) {
       URL.revokeObjectURL(url);
     }
   }
+}
+
+const PROBE_MAX_SIDE = 900;
+
+async function makeProbeBlob(canvas) {
+  const srcW = canvas.width;
+  const srcH = canvas.height;
+  const cur = Math.max(srcW, srcH);
+  if (cur <= PROBE_MAX_SIDE) {
+    return canvas.convertToBlob({ type: 'image/png' });
+  }
+  const scale = PROBE_MAX_SIDE / cur;
+  const width = Math.max(1, Math.round(srcW * scale));
+  const height = Math.max(1, Math.round(srcH * scale));
+  const probe = new OffscreenCanvas(width, height);
+  const ctx = probe.getContext('2d', { willReadFrequently: true });
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, width, height);
+  ctx.drawImage(canvas, 0, 0, width, height);
+  return probe.convertToBlob({ type: 'image/png' });
 }
 
 async function rasterize(buffer, mime) {
@@ -87,7 +142,8 @@ async function rasterize(buffer, mime) {
   if (bitmap.close) bitmap.close();
 
   const outBlob = await canvas.convertToBlob({ type: 'image/png' });
-  return { blob: outBlob, scale, srcW, srcH };
+  const probeBlob = await makeProbeBlob(canvas);
+  return { blob: outBlob, probeBlob, scale, srcW, srcH };
 }
 
 function normalizeText(text) {
@@ -221,15 +277,30 @@ function groupUnits(data, invScale, imageWidth, imageHeight) {
   return units;
 }
 
+async function routeOcrLang(probeBlob) {
+  try {
+    const data = await withWorker(CITLang.OCR_PROBE_LANG, (worker) => (
+      worker.recognize(probeBlob, {}, { text: true })
+    ));
+    const text = (data && data.data && data.data.text) || '';
+    return CITLang.pickOcrLangFromProbe(text);
+  } catch (_err) {
+    return CITLang.OCR_LANG_ZH_EN;
+  }
+}
+
 async function runOcr(buffer, mime) {
   const raster = await rasterize(buffer, mime);
-  const worker = await getWorker();
-  const result = await worker.recognize(raster.blob, {}, { text: true, blocks: true });
+  const lang = await routeOcrLang(raster.probeBlob || raster.blob);
+  const result = await withWorker(lang, (worker) => (
+    worker.recognize(raster.blob, {}, { text: true, blocks: true })
+  ));
   const invScale = 1 / raster.scale;
   return {
     units: groupUnits(result.data || {}, invScale, raster.srcW, raster.srcH),
     imageWidth: raster.srcW,
-    imageHeight: raster.srcH
+    imageHeight: raster.srcH,
+    ocrLang: lang
   };
 }
 
