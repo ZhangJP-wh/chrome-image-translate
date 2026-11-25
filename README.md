@@ -5,7 +5,7 @@ Chrome / Edge 扩展：在网页**图片**或**选中的文字**上右键「翻�
 Chrome / Edge extension: right-click an **image** or **selected text** → **翻译** → **谷歌翻译** or **必应翻译**. The translation appears in a draggable floating window on the same page, without covering the original and without opening a new tab. Text that is not Simplified Chinese (including Japanese, Korean, Traditional Chinese, and English) is translated into Simplified Chinese; Simplified Chinese is translated into English.
 
 **仓库 / Repo:** https://github.com/ZhangJP-wh/chrome-image-translate  
-**版本 / Version:** **0.1.14**（见 `manifest.json`）
+**版本 / Version:** **0.1.15**（见 `manifest.json`）
 
 ### 一句话场景 / What it’s for
 
@@ -229,6 +229,11 @@ Do not use real browsing history, private URLs, or real account data in README/r
 ---
 
 ## 变更 / Changelog
+
+### v0.1.15
+
+- 修复在 `chrome://` 等浏览器内部页（如扩展管理页）上右键「翻译」时出现「文字翻译失败 Error: Cannot access a chrome:// URL」：这些页面不再显示翻译菜单；若仍点到无法注入的页面或框架（例如 Chrome 自带 PDF 查看器、其他扩展页、Chrome 网上应用店），会友好提示并停止，不再把这类预期情况记成错误  
+  Fixed 「文字翻译失败 Error: Cannot access a chrome:// URL」 when using **翻译** on browser-internal pages such as `chrome://extensions`. The menu no longer appears on those pages. If a click still lands on a page or frame that cannot be scripted (for example Chrome's built-in PDF viewer, another extension page, or the Chrome Web Store), the extension now aborts with a clear message and no longer logs that expected case as an error
 
 ### v0.1.14
 

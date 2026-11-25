@@ -1,7 +1,7 @@
 /* 图片翻译 - service worker */
 'use strict';
 
-importScripts('buffer-codec.js', 'layout-utils.js', 'lang-utils.js');
+importScripts('buffer-codec.js', 'layout-utils.js', 'lang-utils.js', 'url-utils.js');
 
 const MENU_ROOT_ID = 'cit-translate-root';
 const MENU_GOOGLE_ID = 'cit-translate-google';
@@ -33,6 +33,7 @@ const BING_SESSION_URLS = [
 
 const DEFAULT_ENGINES = { google: true, bing: true };
 const MENU_CONTEXTS = ['image', 'selection'];
+const MENU_DOCUMENT_URL_PATTERNS = CITUrl.MENU_DOCUMENT_URL_PATTERNS;
 
 async function getEngineSettings() {
   try {
@@ -54,25 +55,29 @@ async function setupMenus() {
     chrome.contextMenus.create({
       id: MENU_ROOT_ID,
       title: '翻译',
-      contexts: MENU_CONTEXTS
+      contexts: MENU_CONTEXTS,
+      documentUrlPatterns: MENU_DOCUMENT_URL_PATTERNS
     });
     chrome.contextMenus.create({
       id: MENU_GOOGLE_ID,
       parentId: MENU_ROOT_ID,
       title: '谷歌翻译',
-      contexts: MENU_CONTEXTS
+      contexts: MENU_CONTEXTS,
+      documentUrlPatterns: MENU_DOCUMENT_URL_PATTERNS
     });
     chrome.contextMenus.create({
       id: MENU_BING_ID,
       parentId: MENU_ROOT_ID,
       title: '必应翻译',
-      contexts: MENU_CONTEXTS
+      contexts: MENU_CONTEXTS,
+      documentUrlPatterns: MENU_DOCUMENT_URL_PATTERNS
     });
     chrome.contextMenus.create({
       id: MENU_HINT_ID,
       parentId: MENU_ROOT_ID,
       title: '提示：在扩展设置里只勾选一项，可去掉二级菜单',
-      contexts: MENU_CONTEXTS
+      contexts: MENU_CONTEXTS,
+      documentUrlPatterns: MENU_DOCUMENT_URL_PATTERNS
     });
     return;
   }
@@ -80,14 +85,16 @@ async function setupMenus() {
     chrome.contextMenus.create({
       id: MENU_GOOGLE_ID,
       title: '谷歌翻译',
-      contexts: MENU_CONTEXTS
+      contexts: MENU_CONTEXTS,
+      documentUrlPatterns: MENU_DOCUMENT_URL_PATTERNS
     });
     return;
   }
   chrome.contextMenus.create({
     id: MENU_BING_ID,
     title: '必应翻译',
-    contexts: MENU_CONTEXTS
+    contexts: MENU_CONTEXTS,
+    documentUrlPatterns: MENU_DOCUMENT_URL_PATTERNS
   });
 }
 
@@ -107,10 +114,42 @@ function sleep(ms) {
 
 function friendlyError(err, fallback) {
   const msg = (err && err.message) ? String(err.message) : '';
+  if (isRestrictedPageError(err)) {
+    return CITUrl.FRIENDLY_RESTRICTED_PAGE;
+  }
   if (/Failed to fetch|NetworkError|network/i.test(msg)) {
     return '网络错误，请检查网络后重试';
   }
   return msg || fallback || '翻译失败，请稍后重试';
+}
+
+function collectPageUrls(info, tab) {
+  const urls = [];
+  if (tab && tab.url) urls.push(tab.url);
+  if (info) {
+    if (info.pageUrl) urls.push(info.pageUrl);
+    if (info.frameUrl) urls.push(info.frameUrl);
+  }
+  return urls;
+}
+
+function restrictedPageError(cause) {
+  const err = new Error(CITUrl.FRIENDLY_RESTRICTED_PAGE);
+  err.code = 'CIT_RESTRICTED_PAGE';
+  if (cause) err.cause = cause;
+  return err;
+}
+
+function isRestrictedPageError(err) {
+  return !!(err && (err.code === 'CIT_RESTRICTED_PAGE' || CITUrl.isRestrictedAccessError(err)));
+}
+
+function assertInjectablePage(info, tab) {
+  for (const url of collectPageUrls(info, tab)) {
+    if (CITUrl.isRestrictedUrl(url)) {
+      throw restrictedPageError();
+    }
+  }
 }
 
 function sniffMime(buffer) {
@@ -429,17 +468,41 @@ async function translateLines(lines, engine, targetLang) {
   return translateLinesGoogle(lines, targetLang);
 }
 
-async function ensureContentScript(tabId, frameId) {
+async function ensureContentScript(tabId, frameId, urls) {
+  const candidates = Array.isArray(urls) ? urls.filter(Boolean) : [];
+  if (!candidates.length) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (tab && tab.url) candidates.push(tab.url);
+    } catch (_err) {
+      // Tab lookup is best-effort; injection errors are handled below.
+    }
+  }
+  for (const url of candidates) {
+    if (CITUrl.isRestrictedUrl(url)) {
+      throw restrictedPageError();
+    }
+  }
   try {
     const pong = await chrome.tabs.sendMessage(tabId, { type: 'CIT_PING' }, { frameId });
     if (pong && pong.ok) return;
-  } catch (_err) {
+  } catch (err) {
+    if (isRestrictedPageError(err)) {
+      throw restrictedPageError(err);
+    }
     // Content script not injected yet (page opened before install, etc.).
   }
-  await chrome.scripting.executeScript({
-    target: { tabId, frameIds: [frameId] },
-    files: ['buffer-codec.js', 'layout-utils.js', 'content.js']
-  });
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [frameId] },
+      files: ['buffer-codec.js', 'layout-utils.js', 'content.js']
+    });
+  } catch (err) {
+    if (isRestrictedPageError(err)) {
+      throw restrictedPageError(err);
+    }
+    throw err;
+  }
 }
 
 async function sendToFrame(tabId, frameId, message) {
@@ -517,7 +580,8 @@ async function handleSelectionTranslate(info, tab, engine) {
   };
 
   try {
-    await ensureContentScript(tabId, frameId);
+    assertInjectablePage(info, tab);
+    await ensureContentScript(tabId, frameId, collectPageUrls(info, tab));
     const prepared = await sendToFrame(tabId, frameId, {
       type: 'CIT_PREPARE_SELECTION',
       requestId,
@@ -552,6 +616,11 @@ async function handleSelectionTranslate(info, tab, engine) {
       blocks: outBlocks
     });
   } catch (err) {
+    if (isRestrictedPageError(err)) {
+      console.warn('图片翻译：当前页面无法注入脚本', err.cause || err);
+      await reportError(CITUrl.FRIENDLY_RESTRICTED_PAGE);
+      return;
+    }
     console.error('文字翻译失败', err);
     await reportError(friendlyError(err, '翻译失败，请稍后重试'));
   }
@@ -575,7 +644,8 @@ async function handleImageTranslate(info, tab, engine) {
   };
 
   try {
-    await ensureContentScript(tabId, frameId);
+    assertInjectablePage(info, tab);
+    await ensureContentScript(tabId, frameId, collectPageUrls(info, tab));
     const prepared = await sendToFrame(tabId, frameId, {
       type: 'CIT_PREPARE',
       requestId,
@@ -649,6 +719,11 @@ async function handleImageTranslate(info, tab, engine) {
       imageHeight: ocr.imageHeight
     });
   } catch (err) {
+    if (isRestrictedPageError(err)) {
+      console.warn('图片翻译：当前页面无法注入脚本', err.cause || err);
+      await reportError(CITUrl.FRIENDLY_RESTRICTED_PAGE);
+      return;
+    }
     console.error('图片翻译失败', err);
     await reportError(friendlyError(err, '翻译失败，请稍后重试'));
   }
